@@ -12,17 +12,38 @@ const { Server } = require("socket.io");
 const authRoutes = require("./routes/auth.routes");
 const adminRoutes = require("./routes/admin.routes");
 const publicProductRoutes = require("./routes/products.routes");
+
 const User = require("./models/User");
 
 const app = express();
 
 // ——————— 1. Connect to MongoDB ———————
+// const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/px39";
+// mongoose
+//   .connect(mongoUri)
+//   .then(() => console.log("✅ MongoDB connected"))
+//   .catch((err) => {
+//     console.error("❌ MongoDB connection error:", err);
+//     process.exit(1);
+//   });
+
+// console.log("User model loaded:", !!User);
+
+// ——————— 1. Connect to MongoDB ———————
 const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/px39";
 
+// (optional) help ensure password characters are encoded if you build URI dynamically
+// e.g. if you have MONGO_USER and MONGO_PASS environment variables:
+// const mongoUri = `mongodb+srv://${process.env.MONGO_USER}:${encodeURIComponent(process.env.MONGO_PASS)}@cluster0.7oy01ch.mongodb.net/px39?retryWrites=true&w=majority`;
+
 const mongooseOptions = {
+  // modern mongoose defaults are OK, but be explicit:
   useNewUrlParser: true,
   useUnifiedTopology: true,
+  // shorter selection timeout helps fail fast while debugging (ms)
   serverSelectionTimeoutMS: 10000,
+  // optional: autoReconnect settings (defaults are fine)
+  // keepAlive: true,
 };
 
 mongoose
@@ -30,8 +51,12 @@ mongoose
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => {
     console.error("❌ MongoDB connection error:", err);
+    // DON'T call process.exit(1) while debugging — nodemon will stop and you lose logs.
+    // If you want to exit in production, uncomment the next line:
+    // process.exit(1);
   });
 
+// Extra listeners for helpful runtime logs:
 mongoose.connection.on("connected", () => console.log("mongoose: connected"));
 mongoose.connection.on("error", (err) =>
   console.error("mongoose connection error:", err)
@@ -45,18 +70,14 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(
   cors({
-    origin: [
-      "http://localhost:3000",
-      process.env.FRONTEND_ORIGIN || "https://px39-frontend.vercel.app",
-      "https://px39-frontend.onrender.com",
-    ],
+    origin: "http://localhost:3000",
     credentials: true,
   })
 );
 app.use(helmet());
 app.use(
   rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
+    windowMs: 15 * 60 * 10000,
     max: 10000,
     message: "Too many requests, please try again later.",
   })
@@ -66,7 +87,9 @@ app.use(
 app.use("/auth", authRoutes);
 app.use("/admin", adminRoutes);
 app.use("/products", publicProductRoutes);
+// in backend/app.js or server.js (where routes are registered)
 app.use("/user", require("./routes/recentlyViewed.routes"));
+
 app.use("/api/wishlist", require("./routes/wishlist.routes"));
 app.use("/cart", require("./routes/cart.routes"));
 const orderRoutes = require("./routes/order.routes");
@@ -75,10 +98,13 @@ app.use("/imagekit", require("./routes/imagekit.routes"));
 app.use("/push", require("./routes/push.routes"));
 app.use("/contacts", require("./routes/contact.routes"));
 app.use("/payments", require("./routes/payments.routes"));
+
 app.use("/messages", require("./routes/message.routes"));
+// mount notifications (if file exists)
 try {
   app.use("/notifications", require("./routes/notifications.routes"));
 } catch (e) {
+  // If notifications route not present, just keep going (helps safe deploy)
   console.warn("Notifications route not mounted:", e.message);
 }
 
@@ -91,17 +117,19 @@ app.get("/", (req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: [
-      "http://localhost:3000",
-      process.env.FRONTEND_ORIGIN || "https://px39-frontend.vercel.app",
-      "https://px39-frontend.onrender.com",
-    ],
+    origin: process.env.FRONTEND_ORIGIN || "http://localhost:3000",
     credentials: true,
   },
 });
 
+// make io available in req.app
 app.set("io", io);
 
+/**
+ * -------------------------
+ * Presence tracking additions
+ * -------------------------
+ */
 const onlineUsers = new Map();
 
 function addOnline(userId, socketId) {
@@ -138,20 +166,29 @@ async function getOnlineUsersDetailed() {
     sockets: onlineUsers.get(String(u._id))?.size || 0,
   }));
 }
+/* end presence additions */
 
+/**
+ * Reliable emit helper attached to io
+ * - emits directly to each known socket id for user (onlineUsers map)
+ * - falls back to room-based emit (io.to(userId).emit)
+ */
 io.emitToUser = function (userId, event, payload) {
   try {
     const uid = String(userId);
     const set = onlineUsers.get(uid);
     if (set && set.size) {
       for (const sid of set.values()) {
+        // direct socket-id emit
         io.to(sid).emit(event, payload);
       }
+      // also emit to user-room (harmless duplicate for clients that joined room)
       io.to(uid).emit(event, payload);
       console.log(
         `io.emitToUser: emitted '${event}' to user ${uid} on ${set.size} sockets`
       );
     } else {
+      // fallback to room emit
       io.to(uid).emit(event, payload);
       console.log(
         `io.emitToUser: emitted '${event}' to room ${uid} (no socket-id map entry)`
@@ -162,17 +199,24 @@ io.emitToUser = function (userId, event, payload) {
   }
 };
 
+/* simple socket auth/register pattern (client should emit 'register' with userId after login) */
 io.on("connection", (socket) => {
   console.log("socket connected:", socket.id);
 
   socket.on("register", async (userId) => {
     console.log(`socket ${socket.id} register called with userId:`, userId);
     try {
-      if (!userId) return;
+      if (!userId) {
+        console.log("register: no userId provided");
+        return;
+      }
       socket.data.userId = String(userId);
       addOnline(socket.data.userId, socket.id);
+
+      // join user-specific room
       socket.join(String(userId));
 
+      // attach basic user info for authorization checks (best-effort)
       try {
         const u = await User.findById(userId)
           .select("role username email avatarUrl")
@@ -182,6 +226,12 @@ io.on("connection", (socket) => {
         socket.data.user = null;
       }
 
+      console.log(
+        `socket ${socket.id} joined room ${String(userId)}. rooms:`,
+        Array.from(socket.rooms)
+      );
+
+      // broadcast updated online list to all connected sockets
       const list = await getOnlineUsersDetailed();
       io.emit("online:update", list);
     } catch (err) {
