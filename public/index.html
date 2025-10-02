@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Auth System Status | Secure Authentication Backend</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Urbanist:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --primary: #6366f1;
+        --primary-dark: #4f46e5;
+        --success: #10b981;
+        --success-bg: #ecfdf5;
+        --text: #1f2937;
+        --text-light: #6b7280;
+        --bg: #f9fafb;
+        --card-bg: #ffffff;
+        --border: #e5e7eb;
+        --icon-primary: #4f46e5;
+        --icon-secondary: #7c3aed;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Urbanist", -apple-system, BlinkMacSystemFont, sans-serif;
+        background-color: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem;
+        line-height: 1.5;
+      }
+
+      .container {
+        max-width: 1200px;
+        width: 100%;
+      }
+
+      .header {
+        text-align: center;
+        margin-bottom: 3rem;
+      }
+
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        background-color: var(--success-bg);
+        color: var(--success);
+        padding: 0.5rem 1.25rem;
+        border-radius: 9999px;
+        font-weight: 600;
+        font-size: 0.875rem;
+        margin-bottom: 1rem;
+      }
+
+      .status-badge::before {
+        content: "";
+        display: block;
+        width: 0.75rem;
+        height: 0.75rem;
+        background-color: var(--success);
+        border-radius: 9999px;
+      }
+
+      h1 {
+        font-size: 2.25rem;
+        font-weight: 700;
+        margin-bottom: 1rem;
+        background: linear-gradient(90deg, var(--primary), var(--primary-dark));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .subtitle {
+        font-size: 1.125rem;
+        color: var(--text-light);
+        max-width: 600px;
+        margin: 0 auto 3rem;
+      }
+
+      .features-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 1.5rem;
+        margin-top: 2rem;
+      }
+
+      .feature-card {
+        background: var(--card-bg);
+        border-radius: 0.75rem;
+        padding: 1.5rem;
+        border: 1px solid var(--border);
+        transition: transform 0.2s, box-shadow 0.2s;
+      }
+
+      .feature-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05);
+      }
+
+      .feature-icon {
+        width: 45px;
+        height: 45px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(
+          135deg,
+          var(--icon-primary),
+          var(--icon-secondary)
+        );
+        border-radius: 8px;
+        margin-bottom: 1rem;
+      }
+
+      .feature-icon svg {
+        width: 24px;
+        height: 24px;
+        color: white;
+      }
+
+      .feature-title {
+        font-weight: 600;
+        margin-bottom: 0.75rem;
+        font-size: 1.125rem;
+      }
+
+      .feature-list {
+        list-style: none;
+        font-size: 0.9375rem;
+        color: var(--text-light);
+      }
+
+      .feature-list li {
+        margin-bottom: 0.5rem;
+        display: flex;
+        align-items: flex-start;
+        gap: 0.5rem;
+      }
+
+      .feature-list li::before {
+        content: "✓";
+        color: var(--success);
+        font-weight: bold;
+        background: none;
+        border: 1px solid var(--success);
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+      }
+
+      .footer {
+        margin-top: 4rem;
+        text-align: center;
+        color: var(--text-light);
+        font-size: 0.875rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <div class="status-badge">OPERATIONAL</div>
+        <h1>Authentication Backend System</h1>
+        <p class="subtitle">
+          Secure, scalable authentication service with MongoDB and modern
+          security middleware
+        </p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M15.75 1.5a6.75 6.75 0 00-6.651 7.906c.067.39-.032.717-.221.906l-6.5 6.499a3 3 0 00-.878 2.121v2.818c0 .414.336.75.75.75H6a.75.75 0 00.75-.75v-1.5h1.5A.75.75 0 009 19.5V18h1.5a.75.75 0 00.53-.22l2.658-2.658c.19-.189.517-.288.906-.22A6.75 6.75 0 1015.75 1.5zm0 3a.75.75 0 000 1.5A2.25 2.25 0 0118 8.25a.75.75 0 001.5 0 3.75 3.75 0 00-3.75-3.75z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </div>
+          <h3 class="feature-title">Core Authentication</h3>
+          <ul class="feature-list">
+            <li>User registration & login</li>
+            <li>JWT access/refresh tokens</li>
+            <li>Password hashing (bcrypt)</li>
+            <li>Secure logout</li>
+          </ul>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <path
+                d="M4.5 6.375a4.125 4.125 0 118.25 0 4.125 4.125 0 01-8.25 0zM14.25 8.625a3.375 3.375 0 116.75 0 3.375 3.375 0 01-6.75 0zM1.5 19.125a7.125 7.125 0 0114.25 0v.003l-.001.119a.75.75 0 01-.363.63 13.067 13.067 0 01-6.761 1.873c-2.472 0-4.786-.684-6.76-1.873a.75.75 0 01-.364-.63l-.001-.122zM17.25 19.128l-.001.144a2.25 2.25 0 01-.233.96 10.088 10.088 0 005.06-1.01.75.75 0 00.42-.643 4.875 4.875 0 00-6.957-4.611 8.586 8.586 0 011.71 5.157v.003z"
+              />
+            </svg>
+          </div>
+          <h3 class="feature-title">User Management</h3>
+          <ul class="feature-list">
+            <li>Role-based permissions</li>
+            <li>User profiles & metadata</li>
+            <li>Account status control</li>
+            <li>Admin dashboard</li>
+          </ul>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M12.516 2.17a.75.75 0 00-1.032 0 11.209 11.209 0 01-7.877 3.08.75.75 0 00-.722.515A12.74 12.74 0 002.25 9.75c0 5.942 4.064 10.933 9.563 12.348a.749.749 0 00.374 0c5.499-1.415 9.563-6.406 9.563-12.348 0-1.39-.223-2.73-.635-3.985a.75.75 0 00-.722-.516l-.143.001c-2.996 0-5.717-1.17-7.734-3.08zm3.094 8.016a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </div>
+          <h3 class="feature-title">Security Protection</h3>
+          <ul class="feature-list">
+            <li>Rate limiting</li>
+            <li>Helmet middleware</li>
+            <li>HTTPS enforcement</li>
+            <li>Suspicious login alerts</li>
+          </ul>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <path
+                d="M1.5 8.67v8.58a3 3 0 003 3h15a3 3 0 003-3V8.67l-8.928 5.493a3 3 0 01-3.144 0L1.5 8.67z"
+              />
+              <path
+                d="M22.5 6.908V6.75a3 3 0 00-3-3h-15a3 3 0 00-3 3v.158l9.714 5.978a1.5 1.5 0 001.572 0L22.5 6.908z"
+              />
+            </svg>
+          </div>
+          <h3 class="feature-title">Email & Verification</h3>
+          <ul class="feature-list">
+            <li>Email verification</li>
+            <li>Password reset flows</li>
+            <li>Welcome emails</li>
+            <li>Magic link login</li>
+          </ul>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M15.75 1.5a6.75 6.75 0 00-6.651 7.906c.067.39-.032.717-.221.906l-6.5 6.499a3 3 0 00-.878 2.121v2.818c0 .414.336.75.75.75H6a.75.75 0 00.75-.75v-1.5h1.5A.75.75 0 009 19.5V18h1.5a.75.75 0 00.53-.22l2.658-2.658c.19-.189.517-.288.906-.22A6.75 6.75 0 1015.75 1.5zm0 3a.75.75 0 000 1.5A2.25 2.25 0 0118 8.25a.75.75 0 001.5 0 3.75 3.75 0 00-3.75-3.75z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </div>
+          <h3 class="feature-title">2FA & Security</h3>
+          <ul class="feature-list">
+            <li>OTP via Email/SMS</li>
+            <li>Authenticator app</li>
+            <li>Backup codes</li>
+            <li>Mandatory 2FA</li>
+          </ul>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              class="size-6"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M2.25 6a3 3 0 0 1 3-3h13.5a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3V6Zm3.97.97a.75.75 0 0 1 1.06 0l2.25 2.25a.75.75 0 0 1 0 1.06l-2.25 2.25a.75.75 0 0 1-1.06-1.06l1.72-1.72-1.72-1.72a.75.75 0 0 1 0-1.06Zm4.28 4.28a.75.75 0 0 0 0 1.5h3a.75.75 0 0 0 0-1.5h-3Z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </div>
+          <h3 class="feature-title">Developer Experience</h3>
+          <ul class="feature-list">
+            <li>AuthProvider & hooks</li>
+            <li>Prebuilt API routes</li>
+            <li>Express middleware</li>
+            <li>React context</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="footer">
+        <p id="footer-year">
+          ©
+          <script>
+            document.write(new Date().getFullYear());
+          </script>
+          Auth Backend System. All features operational.
+        </p>
+      </div>
+    </div>
+  </body>
+</html>

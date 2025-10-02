@@ -1,0 +1,670 @@
+// backend/controllers/auth.controller.js
+
+require("dotenv").config();
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
+const UAParser = require("ua-parser-js");
+const ms = require("ms"); // ← added
+
+const User = require("../models/User");
+const { createAccessToken, createRefreshToken } = require("../utils/token");
+const { sendVerificationEmail } = require("../utils/email");
+const { sendResetPasswordEmail } = require("../utils/email");
+const { sendMagicLinkEmail } = require("../utils/email");
+
+// ─── POST /auth/register ───────────────────────────────────────────────────────
+async function register(req, res) {
+  try {
+    const { username, email, password } = req.body;
+    if (!username || !email || !password) {
+      return res
+        .status(400)
+        .json({ message: "Username, email, and password are required." });
+    }
+
+    const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+    if (existingUser) {
+      return res
+        .status(409)
+        .json({ message: "Username or email already in use." });
+    }
+
+    const salt = await bcrypt.genSalt(12);
+    const passwordHash = await bcrypt.hash(password, salt);
+    const newUser = await User.create({ username, email, passwordHash });
+
+    const token = crypto.randomBytes(32).toString("hex");
+    newUser.verificationToken = token;
+    newUser.verificationTokenExpiry = Date.now() + 60 * 60 * 1000;
+    await newUser.save();
+
+    await sendVerificationEmail(newUser.email, token);
+
+    // after await sendVerificationEmail(newUser.email, token);
+    return res.status(201).json({
+      message:
+        "Registration successful! Please check your email to verify your account.",
+      user: {
+        id: newUser._id,
+        username: newUser.username,
+        email: newUser.email,
+        role: newUser.role || "user",
+      },
+    });
+  } catch (err) {
+    console.error("Registration error:", err);
+    return res
+      .status(500)
+      .json({ message: "Server error during registration." });
+  }
+}
+
+// async function register(req, res) {
+//   try {
+//     const { username, email, password } = req.body;
+//     if (!username || !email || !password) {
+//       return res
+//         .status(400)
+//         .json({ message: "Username, email, and password are required." });
+//     }
+
+//     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+//     if (existingUser) {
+//       return res
+//         .status(409)
+//         .json({ message: "Username or email already in use." });
+//     }
+
+//     const salt = await bcrypt.genSalt(12);
+//     const passwordHash = await bcrypt.hash(password, salt);
+//     const newUser = await User.create({ username, email, passwordHash });
+
+//     const token = crypto.randomBytes(32).toString("hex");
+//     newUser.verificationToken = token;
+//     newUser.verificationTokenExpiry = Date.now() + 60 * 60 * 1000;
+//     await newUser.save();
+
+//     await sendVerificationEmail(newUser.email, token);
+
+//     return res.status(201).json({
+//       message:
+//         "Registration successful! Please check your email to verify your account.",
+//     });
+//   } catch (err) {
+//     console.error("Registration error:", err);
+//     return res
+//       .status(500)
+//       .json({ message: "Server error during registration." });
+//   }
+// }
+
+// ─── POST /auth/verify-email ─────────────────────────────────────────────────
+async function verifyEmail(req, res) {
+  try {
+    const { token } = req.body;
+    if (!token) {
+      return res
+        .status(400)
+        .json({ message: "Verification token is required." });
+    }
+
+    const user = await User.findOne({
+      verificationToken: token,
+      verificationTokenExpiry: { $gt: Date.now() },
+    });
+    if (!user) {
+      return res.status(400).json({ message: "Invalid or expired token." });
+    }
+
+    user.emailVerified = true;
+    user.verificationToken = undefined;
+    user.verificationTokenExpiry = undefined;
+
+    // Auto-login: issue tokens
+    const payload = { userId: user._id, role: user.role };
+    const accessToken = createAccessToken(payload);
+    const refreshToken = createRefreshToken(payload);
+
+    const parser = new UAParser(req.get("User-Agent"));
+    const { browser, os, device } = parser.getResult();
+
+    user.sessions.push({
+      tokenId: `${user.sessions.length + 1}-${Date.now()}`,
+      ip: req.ip || req.connection.remoteAddress,
+      browser: `${browser.name} ${browser.version}`,
+      os: `${os.name} ${os.version}`,
+      device: device.type || "Desktop",
+    });
+    await user.save();
+
+    // ─── sync cookie maxAge with your .env ────────────────────────────────────
+    const accessMaxAge = ms(process.env.ACCESS_TOKEN_EXPIRES_IN || "15m");
+    const refreshMaxAge = ms(process.env.REFRESH_TOKEN_EXPIRES_IN || "7d");
+    // ───────────────────────────────────────────────────────────────────────────
+
+    return res
+      .cookie("accessToken", accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: accessMaxAge, // ← replaced hard-coded
+      })
+      .cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: refreshMaxAge, // ← replaced hard-coded
+      })
+      .json({
+        message: "Email verified and logged in successfully.",
+        user: {
+          id: user._id,
+          username: user.username,
+          email: user.email,
+          role: user.role,
+          avatarUrl: user.avatarUrl || null, // <-- ADDED: include avatar immediately
+        },
+      });
+  } catch (err) {
+    console.error("Verify email error:", err);
+    return res.status(500).json({ message: "Server error verifying email." });
+  }
+}
+
+// ─── POST /auth/resend-verification ────────────────────────────────────────────
+
+async function resendVerification(req, res) {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ message: "Email is required." });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res
+        .status(404)
+        .json({ message: "No account found with that email." });
+    }
+    if (user.emailVerified) {
+      return res.status(400).json({ message: "Email is already verified." });
+    }
+
+    const now = Date.now();
+    const WINDOW_MS = 30 * 1000; // 30 seconds
+
+    if (
+      user.lastVerificationSent &&
+      now - user.lastVerificationSent.getTime() < WINDOW_MS
+    ) {
+      const remainingMs =
+        WINDOW_MS - (now - user.lastVerificationSent.getTime());
+      const totalSec = Math.ceil(remainingMs / 1000);
+      const minutes = Math.floor(totalSec / 60);
+      const seconds = totalSec % 60;
+      const parts = [];
+      if (minutes > 0) parts.push(`${minutes} min`);
+      parts.push(`${seconds} sec`);
+
+      return res.status(429).json({
+        message: `Please wait ${parts.join(
+          " "
+        )} before requesting another email.`,
+      });
+    }
+
+    // generate new token & update timestamps
+    const token = crypto.randomBytes(32).toString("hex");
+    user.verificationToken = token;
+    user.verificationTokenExpiry = now + 60 * 60 * 1000; // 1 hour
+    user.lastVerificationSent = new Date(now);
+    await user.save();
+
+    await sendVerificationEmail(user.email, token);
+
+    return res.json({
+      message: "Verification email resent. Please check your inbox.",
+    });
+  } catch (err) {
+    console.error("Resend verification error:", err);
+    return res
+      .status(500)
+      .json({ message: "Server error resending verification email." });
+  }
+}
+
+// ─── POST /auth/login ──────────────────────────────────────────────────────────
+async function login(req, res) {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res
+        .status(400)
+        .json({ message: "Email and password are required." });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user || user.status !== "active") {
+      return res.status(401).json({ message: "Invalid credentials." });
+    }
+
+    if (!user.emailVerified) {
+      return res
+        .status(403)
+        .json({ message: "Please verify your email before logging in." });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      return res.status(401).json({ message: "Invalid credentials." });
+    }
+
+    // 1. Issue tokens
+    const payload = { userId: user._id, role: user.role };
+    const accessToken = createAccessToken(payload);
+    const refreshToken = createRefreshToken(payload);
+
+    // 2. Parse User-Agent
+    const parser = new UAParser(req.get("User-Agent"));
+    const ua = parser.getResult();
+
+    // 3. Save session entry
+    user.sessions.push({
+      tokenId: `${user.sessions.length + 1}-${Date.now()}`,
+      ip: req.ip || req.connection.remoteAddress,
+      browser: `${ua.browser.name || "Unknown"} ${
+        ua.browser.version || ""
+      }`.trim(),
+      os: `${ua.os.name || "Unknown"} ${ua.os.version || ""}`.trim(),
+      device: ua.device.type || "Desktop",
+    });
+    await user.save();
+
+    // ─── sync cookie maxAge with your .env ────────────────────────────────────
+    const accessMaxAge = ms(process.env.ACCESS_TOKEN_EXPIRES_IN || "15m");
+    const refreshMaxAge = ms(process.env.REFRESH_TOKEN_EXPIRES_IN || "7d");
+    // ───────────────────────────────────────────────────────────────────────────
+
+    return res
+      .cookie("accessToken", accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: accessMaxAge,
+      })
+      .cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: refreshMaxAge,
+      })
+      .json({
+        message: "Logged in successfully.",
+        user: {
+          id: user._id,
+          username: user.username,
+          email: user.email,
+          role: user.role,
+          avatarUrl: user.avatarUrl || null, // <-- ADDED: include avatar immediately
+        },
+      });
+  } catch (err) {
+    console.error("Login error:", err);
+    return res.status(500).json({ message: "Server error during login." });
+  }
+}
+
+// async function login(req, res) {
+//   try {
+//     const { email, password } = req.body;
+//     if (!email || !password) {
+//       return res
+//         .status(400)
+//         .json({ message: "Email and password are required." });
+//     }
+
+//     const user = await User.findOne({ email });
+//     if (!user || user.status !== "active") {
+//       return res.status(401).json({ message: "Invalid credentials." });
+//     }
+
+//     if (!user.emailVerified) {
+//       return res
+//         .status(403)
+//         .json({ message: "Please verify your email before logging in." });
+//     }
+
+//     const isMatch = await bcrypt.compare(password, user.passwordHash);
+//     if (!isMatch) {
+//       return res.status(401).json({ message: "Invalid credentials." });
+//     }
+
+//     // 1. Issue tokens
+//     const payload = { userId: user._id, role: user.role };
+//     const accessToken = createAccessToken(payload);
+//     const refreshToken = createRefreshToken(payload);
+
+//     // 2. Parse User-Agent
+//     const parser = new UAParser(req.get("User-Agent"));
+//     const ua = parser.getResult();
+
+//     // 3. Save session entry
+//     user.sessions.push({
+//       tokenId: `${user.sessions.length + 1}-${Date.now()}`,
+//       ip: req.ip || req.connection.remoteAddress,
+//       browser: `${ua.browser.name || "Unknown"} ${
+//         ua.browser.version || ""
+//       }`.trim(),
+//       os: `${ua.os.name || "Unknown"} ${ua.os.version || ""}`.trim(),
+//       device: ua.device.type || "Desktop",
+//     });
+//     await user.save();
+
+//     // ─── sync cookie maxAge with your .env ────────────────────────────────────
+//     const accessMaxAge = ms(process.env.ACCESS_TOKEN_EXPIRES_IN || "15m");
+//     const refreshMaxAge = ms(process.env.REFRESH_TOKEN_EXPIRES_IN || "7d");
+//     // ───────────────────────────────────────────────────────────────────────────
+
+//     return res
+//       .cookie("accessToken", accessToken, {
+//         httpOnly: true,
+//         secure: process.env.NODE_ENV === "production",
+//         sameSite: "strict",
+//         maxAge: accessMaxAge,
+//       })
+//       .cookie("refreshToken", refreshToken, {
+//         httpOnly: true,
+//         secure: process.env.NODE_ENV === "production",
+//         sameSite: "strict",
+//         maxAge: refreshMaxAge,
+//       })
+//       .json({
+//         message: "Logged in successfully.",
+//         user: {
+//           id: user._id,
+//           username: user.username,
+//           email: user.email,
+//           role: user.role,
+//         },
+//       });
+//   } catch (err) {
+//     console.error("Login error:", err);
+//     return res.status(500).json({ message: "Server error during login." });
+//   }
+// }
+
+async function setAvatarUrl(req, res) {
+  try {
+    const userId = req.user._id;
+    const { avatarUrl } = req.body;
+    if (!avatarUrl) return res.status(400).json({ message: "No URL provided" });
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { avatarUrl },
+      { new: true }
+    ).select("avatarUrl");
+
+    return res.json({ avatarUrl: user.avatarUrl });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Could not update avatar" });
+  }
+}
+
+// ─── POST /auth/refresh ────────────────────────────────────────────────────────
+async function refreshToken(req, res) {
+  try {
+    const token = req.cookies.refreshToken;
+    if (!token) {
+      return res.status(401).json({ message: "Refresh token missing." });
+    }
+
+    const payload = jwt.verify(token, process.env.REFRESH_TOKEN_SECRET);
+    const user = await User.findById(payload.userId);
+    if (!user) {
+      return res.status(401).json({ message: "Invalid refresh token." });
+    }
+
+    const newPayload = { userId: user._id, role: user.role };
+    const newAccessToken = createAccessToken(newPayload);
+    const newRefreshToken = createRefreshToken(newPayload);
+
+    // ─── sync cookie maxAge with your .env ────────────────────────────────────
+    const accessMaxAge = ms(process.env.ACCESS_TOKEN_EXPIRES_IN || "15m");
+    const refreshMaxAge = ms(process.env.REFRESH_TOKEN_EXPIRES_IN || "7d");
+    // ───────────────────────────────────────────────────────────────────────────
+
+    return res
+      .cookie("accessToken", newAccessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: accessMaxAge,
+      })
+      .cookie("refreshToken", newRefreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: refreshMaxAge,
+      })
+      .json({ message: "Tokens refreshed." });
+  } catch (err) {
+    console.error("Refresh token error:", err);
+    return res
+      .status(401)
+      .json({ message: "Invalid or expired refresh token." });
+  }
+}
+
+// ─── POST /auth/request-password-reset ─────────────────────────────────────────
+async function requestPasswordReset(req, res) {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: "Email is required." });
+
+    const user = await User.findOne({ email });
+    if (!user)
+      return res.status(404).json({ message: "No account with that email." });
+
+    const token = crypto.randomBytes(32).toString("hex");
+    user.resetPasswordToken = token;
+    user.resetPasswordExpiry = Date.now() + 60 * 60 * 1000;
+    await user.save();
+
+    await sendResetPasswordEmail(user.email, token);
+    return res.json({ message: "Password reset email sent." });
+  } catch (err) {
+    console.error("Request password reset error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+}
+
+// ─── POST /auth/reset-password ─────────────────────────────────────────────────
+async function resetPassword(req, res) {
+  try {
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword) {
+      return res
+        .status(400)
+        .json({ message: "Token and new password are required." });
+    }
+
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpiry: { $gt: Date.now() },
+    });
+    if (!user) {
+      return res.status(400).json({ message: "Invalid or expired token." });
+    }
+
+    const salt = await bcrypt.genSalt(12);
+    user.passwordHash = await bcrypt.hash(newPassword, salt);
+
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpiry = undefined;
+    user.sessions = [];
+    await user.save();
+
+    return res.json({ message: "Password has been reset successfully." });
+  } catch (err) {
+    console.error("Reset password error:", err);
+    return res.status(500).json({ message: "Server error." });
+  }
+}
+
+// ─── POST /auth/logout ────────────────────────────────────────────────────────
+async function logout(req, res) {
+  try {
+    return res
+      .clearCookie("accessToken")
+      .clearCookie("refreshToken")
+      .json({ message: "Logged out successfully." });
+  } catch (err) {
+    console.error("Logout error:", err);
+    return res.status(500).json({ message: "Server error during logout." });
+  }
+}
+
+// ─── GET /auth/sessions ───────────────────────────────────────────────────────
+async function getSessions(req, res) {
+  return res.json({ sessions: req.user.sessions });
+}
+
+// ─── DELETE /auth/sessions/:tokenId ──────────────────────────────────────────
+async function revokeSession(req, res) {
+  const { tokenId } = req.params;
+  const user = req.user;
+  user.sessions = user.sessions.filter((s) => s.tokenId !== tokenId);
+  await user.save();
+  return res.json({ message: "Session revoked." });
+}
+
+// ─── POST /auth/magic-link-request ─────────────────────────────────────────────
+async function requestMagicLink(req, res) {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ message: "Email is required." });
+
+  const user = await User.findOne({ email });
+  if (!user)
+    return res.status(404).json({ message: "No account with that email." });
+
+  const token = crypto.randomBytes(32).toString("hex");
+  user.magicLinkToken = token;
+  user.magicLinkExpiry = Date.now() + 15 * 60 * 1000;
+  await user.save();
+
+  await sendMagicLinkEmail(user.email, token);
+  return res.json({ message: "Magic link sent! Check your email." });
+}
+
+// ─── GET /auth/magic ────────────────────────────────────────────────────────────
+async function magicLogin(req, res) {
+  try {
+    const { token } = req.query;
+    if (!token) return res.status(400).send("Token is required.");
+
+    const user = await User.findOne({
+      magicLinkToken: token,
+      magicLinkExpiry: { $gt: Date.now() },
+    });
+    if (!user) {
+      return res.status(400).send("Invalid or expired magic link.");
+    }
+
+    user.magicLinkToken = undefined;
+    user.magicLinkExpiry = undefined;
+
+    const payload = { userId: user._id, role: user.role };
+    const accessToken = createAccessToken(payload);
+    const refreshToken = createRefreshToken(payload);
+
+    const parser = new UAParser(req.get("User-Agent"));
+    const ua = parser.getResult();
+    user.sessions.push({
+      tokenId: `${user.sessions.length + 1}-${Date.now()}`,
+      ip: req.ip || req.connection.remoteAddress,
+      browser: `${ua.browser.name} ${ua.browser.version}`.trim(),
+      os: `${ua.os.name} ${ua.os.version}`.trim(),
+      device: ua.device.type || "Desktop",
+    });
+    await user.save();
+
+    // ─── sync cookie maxAge with your .env ────────────────────────────────────
+    const accessMaxAge = ms(process.env.ACCESS_TOKEN_EXPIRES_IN || "15m");
+    const refreshMaxAge = ms(process.env.REFRESH_TOKEN_EXPIRES_IN || "7d");
+    // ───────────────────────────────────────────────────────────────────────────
+
+    return res
+      .cookie("accessToken", accessToken, {
+        httpOnly: true,
+        sameSite: "strict",
+        maxAge: accessMaxAge,
+      })
+      .cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        sameSite: "strict",
+        maxAge: refreshMaxAge,
+      })
+      .redirect(`${process.env.FRONTEND_URL}/`);
+  } catch (err) {
+    console.error("Magic login error:", err);
+    return res.status(500).send("Server error during magic login.");
+  }
+}
+
+// ─── PUT /auth/me ───────────────────────────────────────────────────────────
+async function updateProfile(req, res) {
+  try {
+    const { username, email } = req.body;
+    const user = await User.findById(req.user._id);
+    if (username) user.username = username;
+    if (email) user.email = email;
+    await user.save();
+    return res.json({
+      message: "Profile updated.",
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        avatarUrl: user.avatarUrl,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Could not update profile." });
+  }
+}
+
+// ─── DELETE /auth/me ────────────────────────────────────────────────────────
+async function deleteAccount(req, res) {
+  try {
+    // Soft-delete: you could also permanently remove
+    await User.findByIdAndUpdate(req.user._id, { status: "deleted" });
+    // clear cookies
+    res.clearCookie("accessToken").clearCookie("refreshToken");
+    return res.json({ message: "Account deleted." });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: "Could not delete account." });
+  }
+}
+
+module.exports = {
+  register,
+  verifyEmail,
+  resendVerification,
+  login,
+  refreshToken,
+  requestPasswordReset,
+  resetPassword,
+  logout,
+  getSessions,
+  revokeSession,
+  requestMagicLink,
+  setAvatarUrl,
+  magicLogin,
+  deleteAccount,
+  updateProfile,
+};
