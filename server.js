@@ -17,33 +17,20 @@ const User = require("./models/User");
 
 const app = express();
 
-// ——————— 1. Connect to MongoDB ———————
-// const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/px39";
-// mongoose
-//   .connect(mongoUri)
-//   .then(() => console.log("✅ MongoDB connected"))
-//   .catch((err) => {
-//     console.error("❌ MongoDB connection error:", err);
-//     process.exit(1);
-//   });
+// IMPORTANT: tell express it's behind a proxy (Render, Heroku, etc)
+// so req.secure and cookie secure behavior work correctly.
+app.set("trust proxy", 1);
 
-// console.log("User model loaded:", !!User);
+// FRONTEND_ORIGIN: set this in Render to your frontend URL (e.g. https://my-frontend.onrender.com)
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:3000";
 
 // ——————— 1. Connect to MongoDB ———————
 const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/px39";
 
-// (optional) help ensure password characters are encoded if you build URI dynamically
-// e.g. if you have MONGO_USER and MONGO_PASS environment variables:
-// const mongoUri = `mongodb+srv://${process.env.MONGO_USER}:${encodeURIComponent(process.env.MONGO_PASS)}@cluster0.7oy01ch.mongodb.net/px39?retryWrites=true&w=majority`;
-
+// modern mongoose: avoid deprecated options
 const mongooseOptions = {
-  // modern mongoose defaults are OK, but be explicit:
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
   // shorter selection timeout helps fail fast while debugging (ms)
   serverSelectionTimeoutMS: 10000,
-  // optional: autoReconnect settings (defaults are fine)
-  // keepAlive: true,
 };
 
 mongoose
@@ -52,8 +39,6 @@ mongoose
   .catch((err) => {
     console.error("❌ MongoDB connection error:", err);
     // DON'T call process.exit(1) while debugging — nodemon will stop and you lose logs.
-    // If you want to exit in production, uncomment the next line:
-    // process.exit(1);
   });
 
 // Extra listeners for helpful runtime logs:
@@ -68,16 +53,19 @@ mongoose.connection.on("disconnected", () =>
 // ——————— 2. Global Middleware ———————
 app.use(express.json());
 app.use(cookieParser());
+
+// CORS must allow credentials and the exact frontend origin
 app.use(
   cors({
-    origin: "http://localhost:3000",
+    origin: FRONTEND_ORIGIN,
     credentials: true,
   })
 );
+
 app.use(helmet());
 app.use(
   rateLimit({
-    windowMs: 15 * 60 * 10000,
+    windowMs: 15 * 60 * 1000, // 15 minutes
     max: 10000,
     message: "Too many requests, please try again later.",
   })
@@ -117,7 +105,7 @@ app.get("/", (req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_ORIGIN || "http://localhost:3000",
+    origin: FRONTEND_ORIGIN,
     credentials: true,
   },
 });
@@ -170,8 +158,6 @@ async function getOnlineUsersDetailed() {
 
 /**
  * Reliable emit helper attached to io
- * - emits directly to each known socket id for user (onlineUsers map)
- * - falls back to room-based emit (io.to(userId).emit)
  */
 io.emitToUser = function (userId, event, payload) {
   try {
@@ -179,16 +165,13 @@ io.emitToUser = function (userId, event, payload) {
     const set = onlineUsers.get(uid);
     if (set && set.size) {
       for (const sid of set.values()) {
-        // direct socket-id emit
         io.to(sid).emit(event, payload);
       }
-      // also emit to user-room (harmless duplicate for clients that joined room)
       io.to(uid).emit(event, payload);
       console.log(
         `io.emitToUser: emitted '${event}' to user ${uid} on ${set.size} sockets`
       );
     } else {
-      // fallback to room emit
       io.to(uid).emit(event, payload);
       console.log(
         `io.emitToUser: emitted '${event}' to room ${uid} (no socket-id map entry)`
@@ -265,5 +248,5 @@ io.on("connection", (socket) => {
 // ——————— 6. Start the server ———————
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
-  console.log(`🚀 Server listening on http://localhost:${PORT}`);
+  console.log(`🚀 Server listening on port ${PORT}`);
 });
