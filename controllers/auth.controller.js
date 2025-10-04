@@ -474,7 +474,7 @@ async function magicLogin(req, res) {
     const frontendUrl =
       process.env.FRONTEND_ORIGIN ||
       process.env.FRONTEND_URL ||
-      "https://px39-test-final.vercel.app";
+      "https://px39-test-final-woad.vercel.app";
 
     return res
       .cookie("accessToken", accessToken, makeCookieOptions(accessMaxAge))

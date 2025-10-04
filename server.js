@@ -24,7 +24,7 @@ app.set("trust proxy", 1);
 
 // FRONTEND_ORIGIN: set this in Render to your frontend URL (e.g. https://my-frontend.onrender.com)
 const FRONTEND_ORIGIN =
-  process.env.FRONTEND_ORIGIN || "https://px39-test-final.vercel.app";
+  process.env.FRONTEND_ORIGIN || "https://px39-test-final-woad.vercel.app";
 // You might also set FRONTEND_URL in env; we'll allow both
 const FRONTEND_URL = process.env.FRONTEND_URL || process.env.FRONTEND_ORIGIN;
 
@@ -61,10 +61,10 @@ app.use(cookieParser());
 // ====== START: robust CORS for multiple origins ======
 // Build allowedOrigins using env values plus common dev domain(s)
 const allowedOrigins = [
-  FRONTEND_ORIGIN,
   FRONTEND_URL,
+  FRONTEND_ORIGIN,
+  "https://px39-test-final-woad.vercel.app", // explicit fallback
   "http://localhost:3000",
-  "https://px39-test-final.vercel.app", // explicit fallback
 ];
 
 // Small helper to check origin, allowing requests with no origin (server-to-server)
