@@ -22,7 +22,8 @@ const app = express();
 app.set("trust proxy", 1);
 
 // FRONTEND_ORIGIN: set this in Render to your frontend URL (e.g. https://my-frontend.onrender.com)
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:3000";
+const FRONTEND_ORIGIN =
+  process.env.FRONTEND_ORIGIN || "https://px39-test-final.vercel.app";
 
 // ——————— 1. Connect to MongoDB ———————
 const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/px39";
