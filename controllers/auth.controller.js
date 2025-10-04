@@ -420,7 +420,7 @@ async function magicLogin(req, res) {
     const frontendUrl =
       process.env.FRONTEND_ORIGIN ||
       process.env.FRONTEND_URL ||
-      "https://px39-frontend-final-test-1.vercel.app/";
+      "https://px39-frontend-test-1.onrender.com/";
 
     return res
       .cookie("accessToken", accessToken, makeCookieOptions(accessMaxAge))

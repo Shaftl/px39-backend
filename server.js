@@ -22,8 +22,7 @@ app.set("trust proxy", 1);
 
 // Configure frontend origins via environment
 const FRONTEND_ORIGIN =
-  process.env.FRONTEND_ORIGIN ||
-  "https://px39-frontend-final-test-1.vercel.app/";
+  process.env.FRONTEND_ORIGIN || "https://px39-frontend-test-1.onrender.com/";
 const FRONTEND_URL = process.env.FRONTEND_URL || FRONTEND_ORIGIN;
 
 // ——————— 1. Connect to MongoDB ———————
