@@ -17,10 +17,11 @@ const { sendMagicLinkEmail } = require("../utils/email");
 // ---------------------------
 const isProd = process.env.NODE_ENV === "production";
 
+// Use 'lax' in non-prod so localhost flows are not blocked; use 'none' in production
 const makeCookieOptions = (maxAge) => ({
   httpOnly: true,
-  secure: isProd, // must be true for SameSite=None
-  sameSite: isProd ? "none" : "strict",
+  secure: isProd, // must be true for SameSite=None to be accepted by browsers on https
+  sameSite: isProd ? "none" : "lax",
   maxAge,
   path: "/",
 });
@@ -29,7 +30,7 @@ const makeCookieOptions = (maxAge) => ({
 const makeClearCookieOptions = () => ({
   httpOnly: true,
   secure: isProd,
-  sameSite: isProd ? "none" : "strict",
+  sameSite: isProd ? "none" : "lax",
   path: "/",
 });
 
@@ -469,10 +470,16 @@ async function magicLogin(req, res) {
     const refreshMaxAge = ms(process.env.REFRESH_TOKEN_EXPIRES_IN || "7d");
     // ───────────────────────────────────────────────────────────────────────────
 
+    // Use FRONTEND_ORIGIN or FRONTEND_URL from env; fallback to your Vercel domain
+    const frontendUrl =
+      process.env.FRONTEND_ORIGIN ||
+      process.env.FRONTEND_URL ||
+      "https://px39-test-final.vercel.app";
+
     return res
       .cookie("accessToken", accessToken, makeCookieOptions(accessMaxAge))
       .cookie("refreshToken", refreshToken, makeCookieOptions(refreshMaxAge))
-      .redirect(`${process.env.FRONTEND_URL}/`);
+      .redirect(`${frontendUrl}/`);
   } catch (err) {
     console.error("Magic login error:", err);
     return res.status(500).send("Server error during magic login.");
@@ -502,7 +509,7 @@ async function updateProfile(req, res) {
   }
 }
 
-// ─── DELETE /auth/me ────────────────────────────────────────────────────────
+// ─── DELETE /auth/me ───────────────────────────────────────────────────────
 async function deleteAccount(req, res) {
   try {
     // Soft-delete: you could also permanently remove

@@ -1,3 +1,4 @@
+// server.js (full file - updated CORS/socket logic)
 require("dotenv").config();
 const express = require("express");
 const http = require("http");
@@ -24,7 +25,8 @@ app.set("trust proxy", 1);
 // FRONTEND_ORIGIN: set this in Render to your frontend URL (e.g. https://my-frontend.onrender.com)
 const FRONTEND_ORIGIN =
   process.env.FRONTEND_ORIGIN || "https://px39-test-final.vercel.app";
-// process.env.FRONTEND_ORIGIN || "http://localhost:3000";
+// You might also set FRONTEND_URL in env; we'll allow both
+const FRONTEND_URL = process.env.FRONTEND_URL || process.env.FRONTEND_ORIGIN;
 
 // ——————— 1. Connect to MongoDB ———————
 const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/px39";
@@ -56,13 +58,40 @@ mongoose.connection.on("disconnected", () =>
 app.use(express.json());
 app.use(cookieParser());
 
-// CORS must allow credentials and the exact frontend origin
-app.use(
-  cors({
-    origin: FRONTEND_ORIGIN,
-    credentials: true,
-  })
-);
+// ====== START: robust CORS for multiple origins ======
+// Build allowedOrigins using env values plus common dev domain(s)
+const allowedOrigins = [
+  FRONTEND_ORIGIN,
+  FRONTEND_URL,
+  "http://localhost:3000",
+  "https://px39-test-final.vercel.app", // explicit fallback
+];
+
+// Small helper to check origin, allowing requests with no origin (server-to-server)
+function originAllowed(origin) {
+  if (!origin) return true; // allow non-browser requests like curl, server -> server
+  return allowedOrigins.includes(origin);
+}
+
+// Use flexible middleware that sets Access-Control-Allow-* headers
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin) return next();
+  if (originAllowed(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type,Authorization,X-Requested-With"
+    );
+    if (req.method === "OPTIONS") return res.sendStatus(200);
+    return next();
+  }
+  // In production be strict
+  return res.status(403).json({ error: "CORS origin not allowed" });
+});
+// ====== END: robust CORS for multiple origins ======
 
 app.use(helmet());
 app.use(
@@ -77,7 +106,6 @@ app.use(
 app.use("/auth", authRoutes);
 app.use("/admin", adminRoutes);
 app.use("/products", publicProductRoutes);
-// in backend/app.js or server.js (where routes are registered)
 app.use("/user", require("./routes/recentlyViewed.routes"));
 
 app.use("/api/wishlist", require("./routes/wishlist.routes"));
@@ -105,9 +133,16 @@ app.get("/", (req, res) => {
 
 // ——————— 5. Create HTTP server and Socket.IO ———————
 const server = http.createServer(app);
+
+// Use same origin checking for socket.io CORS
 const io = new Server(server, {
   cors: {
-    origin: FRONTEND_ORIGIN,
+    origin: function (origin, cb) {
+      // origin may be undefined for non-browser clients
+      if (!origin) return cb(null, true);
+      if (originAllowed(origin)) return cb(null, true);
+      return cb(new Error("Not allowed by CORS"));
+    },
     credentials: true,
   },
 });
@@ -155,8 +190,7 @@ async function getOnlineUsersDetailed() {
     role: u.role || "user",
     sockets: onlineUsers.get(String(u._id))?.size || 0,
   }));
-}
-/* end presence additions */
+} /* end presence additions */
 
 /**
  * Reliable emit helper attached to io
