@@ -1,4 +1,4 @@
-// server.js (full file - updated CORS/socket logic)
+// server.js (final)
 require("dotenv").config();
 const express = require("express");
 const http = require("http");
@@ -6,7 +6,6 @@ const mongoose = require("mongoose");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const cookieParser = require("cookie-parser");
-const cors = require("cors");
 const path = require("path");
 const { Server } = require("socket.io");
 
@@ -18,34 +17,23 @@ const User = require("./models/User");
 
 const app = express();
 
-// IMPORTANT: tell express it's behind a proxy (Render, Heroku, etc)
-// so req.secure and cookie secure behavior work correctly.
+// IMPORTANT: behind a proxy (Render, etc.)
 app.set("trust proxy", 1);
 
-// FRONTEND_ORIGIN: set this in Render to your frontend URL (e.g. https://my-frontend.onrender.com)
+// Configure frontend origins via environment
 const FRONTEND_ORIGIN =
   process.env.FRONTEND_ORIGIN || "https://px39-test-final-woad.vercel.app";
-// You might also set FRONTEND_URL in env; we'll allow both
-const FRONTEND_URL = process.env.FRONTEND_URL || process.env.FRONTEND_ORIGIN;
+const FRONTEND_URL = process.env.FRONTEND_URL || FRONTEND_ORIGIN;
 
 // ——————— 1. Connect to MongoDB ———————
 const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/px39";
-
-// modern mongoose: avoid deprecated options
-const mongooseOptions = {
-  // shorter selection timeout helps fail fast while debugging (ms)
-  serverSelectionTimeoutMS: 10000,
-};
+const mongooseOptions = { serverSelectionTimeoutMS: 10000 };
 
 mongoose
   .connect(mongoUri, mongooseOptions)
   .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => {
-    console.error("❌ MongoDB connection error:", err);
-    // DON'T call process.exit(1) while debugging — nodemon will stop and you lose logs.
-  });
+  .catch((err) => console.error("❌ MongoDB connection error:", err));
 
-// Extra listeners for helpful runtime logs:
 mongoose.connection.on("connected", () => console.log("mongoose: connected"));
 mongoose.connection.on("error", (err) =>
   console.error("mongoose connection error:", err)
@@ -59,44 +47,80 @@ app.use(express.json());
 app.use(cookieParser());
 
 // ====== START: robust CORS for multiple origins ======
-// Build allowedOrigins using env values plus common dev domain(s)
-const allowedOrigins = [
+// Base allowed origins (explicit from env + common dev hosts)
+const allowedOrigins = new Set([
   FRONTEND_URL,
   FRONTEND_ORIGIN,
-  "https://px39-test-final-woad.vercel.app", // explicit fallback
   "http://localhost:3000",
-];
+  "http://127.0.0.1:3000",
+]);
 
-// Small helper to check origin, allowing requests with no origin (server-to-server)
+/**
+ * originAllowed: allow:
+ *  - requests with no Origin (server-to-server)
+ *  - exact origins present in allowedOrigins
+ *  - Vercel preview subdomains that contain your project slug (e.g. px39-test-final-*)
+ */
 function originAllowed(origin) {
-  if (!origin) return true; // allow non-browser requests like curl, server -> server
-  return allowedOrigins.includes(origin);
+  if (!origin) return true; // allow non-browser requests
+
+  // exact match first
+  if (allowedOrigins.has(origin)) return true;
+
+  // attempt to parse hostname (graceful)
+  try {
+    const u = new URL(origin);
+    const hostname = u.hostname.toLowerCase();
+
+    // allow vercel preview domains that contain your project slug
+    // replace 'px39-test-final' with your actual project base if different
+    const projectSlug = "px39-test-final";
+    if (hostname.endsWith(".vercel.app") && hostname.includes(projectSlug)) {
+      return true;
+    }
+
+    // optionally allow other patterns: uncomment & adjust if needed
+    // if (hostname.endsWith(".your-custom-domain.com")) return true;
+
+    return false;
+  } catch (e) {
+    return false;
+  }
 }
 
-// Use flexible middleware that sets Access-Control-Allow-* headers
+// CORS middleware: dynamically sets Access-Control-Allow-* headers for allowed origins
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (!origin) return next();
+
   if (originAllowed(origin)) {
-    res.header("Access-Control-Allow-Origin", origin);
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
-    res.header(
+    // make sure proxy caches don't mix origins
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    );
+    res.setHeader(
       "Access-Control-Allow-Headers",
       "Content-Type,Authorization,X-Requested-With"
     );
+    // quick debug log (remove if too verbose)
+    console.log(`CORS: allowed origin ${origin} for ${req.method} ${req.url}`);
     if (req.method === "OPTIONS") return res.sendStatus(200);
     return next();
+  } else {
+    console.warn(`CORS: blocked origin ${origin} for ${req.method} ${req.url}`);
+    return res.status(403).json({ error: "CORS origin not allowed" });
   }
-  // In production be strict
-  return res.status(403).json({ error: "CORS origin not allowed" });
 });
 // ====== END: robust CORS for multiple origins ======
 
 app.use(helmet());
 app.use(
   rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
+    windowMs: 15 * 60 * 1000,
     max: 10000,
     message: "Too many requests, please try again later.",
   })
@@ -107,22 +131,17 @@ app.use("/auth", authRoutes);
 app.use("/admin", adminRoutes);
 app.use("/products", publicProductRoutes);
 app.use("/user", require("./routes/recentlyViewed.routes"));
-
 app.use("/api/wishlist", require("./routes/wishlist.routes"));
 app.use("/cart", require("./routes/cart.routes"));
-const orderRoutes = require("./routes/order.routes");
-app.use("/orders", orderRoutes);
+app.use("/orders", require("./routes/order.routes"));
 app.use("/imagekit", require("./routes/imagekit.routes"));
 app.use("/push", require("./routes/push.routes"));
 app.use("/contacts", require("./routes/contact.routes"));
 app.use("/payments", require("./routes/payments.routes"));
-
 app.use("/messages", require("./routes/message.routes"));
-// mount notifications (if file exists)
 try {
   app.use("/notifications", require("./routes/notifications.routes"));
 } catch (e) {
-  // If notifications route not present, just keep going (helps safe deploy)
   console.warn("Notifications route not mounted:", e.message);
 }
 
@@ -134,11 +153,9 @@ app.get("/", (req, res) => {
 // ——————— 5. Create HTTP server and Socket.IO ———————
 const server = http.createServer(app);
 
-// Use same origin checking for socket.io CORS
 const io = new Server(server, {
   cors: {
     origin: function (origin, cb) {
-      // origin may be undefined for non-browser clients
       if (!origin) return cb(null, true);
       if (originAllowed(origin)) return cb(null, true);
       return cb(new Error("Not allowed by CORS"));
@@ -147,23 +164,16 @@ const io = new Server(server, {
   },
 });
 
-// make io available in req.app
 app.set("io", io);
 
-/**
- * -------------------------
- * Presence tracking additions
- * -------------------------
- */
+/* Presence tracking (unchanged) */
 const onlineUsers = new Map();
-
 function addOnline(userId, socketId) {
   const id = String(userId);
   const set = onlineUsers.get(id) || new Set();
   set.add(socketId);
   onlineUsers.set(id, set);
 }
-
 function removeOnlineBySocket(socketId) {
   for (const [userId, set] of onlineUsers.entries()) {
     if (set.has(socketId)) {
@@ -175,7 +185,6 @@ function removeOnlineBySocket(socketId) {
   }
   return null;
 }
-
 async function getOnlineUsersDetailed() {
   const ids = Array.from(onlineUsers.keys());
   if (ids.length === 0) return [];
@@ -190,19 +199,14 @@ async function getOnlineUsersDetailed() {
     role: u.role || "user",
     sockets: onlineUsers.get(String(u._id))?.size || 0,
   }));
-} /* end presence additions */
+}
 
-/**
- * Reliable emit helper attached to io
- */
 io.emitToUser = function (userId, event, payload) {
   try {
     const uid = String(userId);
     const set = onlineUsers.get(uid);
     if (set && set.size) {
-      for (const sid of set.values()) {
-        io.to(sid).emit(event, payload);
-      }
+      for (const sid of set.values()) io.to(sid).emit(event, payload);
       io.to(uid).emit(event, payload);
       console.log(
         `io.emitToUser: emitted '${event}' to user ${uid} on ${set.size} sockets`
@@ -218,24 +222,14 @@ io.emitToUser = function (userId, event, payload) {
   }
 };
 
-/* simple socket auth/register pattern (client should emit 'register' with userId after login) */
 io.on("connection", (socket) => {
   console.log("socket connected:", socket.id);
-
   socket.on("register", async (userId) => {
-    console.log(`socket ${socket.id} register called with userId:`, userId);
     try {
-      if (!userId) {
-        console.log("register: no userId provided");
-        return;
-      }
+      if (!userId) return;
       socket.data.userId = String(userId);
       addOnline(socket.data.userId, socket.id);
-
-      // join user-specific room
       socket.join(String(userId));
-
-      // attach basic user info for authorization checks (best-effort)
       try {
         const u = await User.findById(userId)
           .select("role username email avatarUrl")
@@ -244,13 +238,6 @@ io.on("connection", (socket) => {
       } catch (err) {
         socket.data.user = null;
       }
-
-      console.log(
-        `socket ${socket.id} joined room ${String(userId)}. rooms:`,
-        Array.from(socket.rooms)
-      );
-
-      // broadcast updated online list to all connected sockets
       const list = await getOnlineUsersDetailed();
       io.emit("online:update", list);
     } catch (err) {
@@ -260,9 +247,8 @@ io.on("connection", (socket) => {
 
   socket.on("online:get", async (payload, cb) => {
     try {
-      if (!socket.data.user || socket.data.user.role !== "admin") {
+      if (!socket.data.user || socket.data.user.role !== "admin")
         return cb && cb({ error: "unauthorized" });
-      }
       const list = await getOnlineUsersDetailed();
       return cb && cb({ ok: true, users: list });
     } catch (err) {
