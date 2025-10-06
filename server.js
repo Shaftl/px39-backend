@@ -22,7 +22,7 @@ app.set("trust proxy", 1);
 // Configure frontend origins via environment
 // Note: default origins don't include a trailing slash so they match req.headers.origin exactly.
 const FRONTEND_ORIGIN =
-  process.env.FRONTEND_ORIGIN || "https://px39-frontend-test-1.onrender.com";
+  process.env.FRONTEND_ORIGIN || "https://px39-test-final.vercel.app";
 const FRONTEND_URL = process.env.FRONTEND_URL || FRONTEND_ORIGIN;
 
 // Project slug used to allow vercel preview domains that contain your project name.
