@@ -1,4 +1,3 @@
-// server.js (final)
 require("dotenv").config();
 const express = require("express");
 const http = require("http");
@@ -21,9 +20,14 @@ const app = express();
 app.set("trust proxy", 1);
 
 // Configure frontend origins via environment
+// Note: default origins don't include a trailing slash so they match req.headers.origin exactly.
 const FRONTEND_ORIGIN =
-  process.env.FRONTEND_ORIGIN || "https://px39-test-final-woad.vercel.app/";
+  process.env.FRONTEND_ORIGIN || "https://px39-frontend-test-1.onrender.com";
 const FRONTEND_URL = process.env.FRONTEND_URL || FRONTEND_ORIGIN;
+
+// Project slug used to allow vercel preview domains that contain your project name.
+// You can set PROJECT_SLUG in environment to be exact, otherwise fallback to a short 'px39' substring.
+const PROJECT_SLUG = process.env.PROJECT_SLUG || "px39";
 
 // ——————— 1. Connect to MongoDB ———————
 const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/px39";
@@ -59,7 +63,7 @@ const allowedOrigins = new Set([
  * originAllowed: allow:
  *  - requests with no Origin (server-to-server)
  *  - exact origins present in allowedOrigins
- *  - Vercel preview subdomains that contain your project slug (e.g. px39-test-final-*)
+ *  - Vercel preview subdomains that contain your project substring (e.g. px39)
  */
 function originAllowed(origin) {
   if (!origin) return true; // allow non-browser requests
@@ -72,15 +76,10 @@ function originAllowed(origin) {
     const u = new URL(origin);
     const hostname = u.hostname.toLowerCase();
 
-    // allow vercel preview domains that contain your project slug
-    // replace 'px39-test-final' with your actual project base if different
-    const projectSlug = "px39-test-final";
-    if (hostname.endsWith(".vercel.app") && hostname.includes(projectSlug)) {
+    // allow vercel preview domains that contain your project slug/substring
+    if (hostname.endsWith(".vercel.app") && hostname.includes(PROJECT_SLUG)) {
       return true;
     }
-
-    // optionally allow other patterns: uncomment & adjust if needed
-    // if (hostname.endsWith(".your-custom-domain.com")) return true;
 
     return false;
   } catch (e) {

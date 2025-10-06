@@ -1,4 +1,3 @@
-// backend/controllers/auth.controller.js (final)
 require("dotenv").config();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -54,7 +53,16 @@ async function register(req, res) {
     newUser.verificationTokenExpiry = Date.now() + 60 * 60 * 1000;
     await newUser.save();
 
-    await sendVerificationEmail(newUser.email, token);
+    // TRY SENDING EMAIL BUT DO NOT FAIL REGISTRATION IF EMAIL SEND FAILS
+    try {
+      await sendVerificationEmail(newUser.email, token);
+    } catch (emailErr) {
+      console.warn(
+        "sendVerificationEmail failed:",
+        emailErr && emailErr.message
+      );
+      // do not return an error — registration should succeed even if SMTP is misconfigured
+    }
 
     return res.status(201).json({
       message:
@@ -172,7 +180,15 @@ async function resendVerification(req, res) {
     user.lastVerificationSent = new Date(now);
     await user.save();
 
-    await sendVerificationEmail(user.email, token);
+    try {
+      await sendVerificationEmail(user.email, token);
+    } catch (emailErr) {
+      console.warn(
+        "sendVerificationEmail (resend) failed:",
+        emailErr && emailErr.message
+      );
+      // still return success to user — they can ask admin or check logs
+    }
 
     return res.json({
       message: "Verification email resent. Please check your inbox.",
@@ -306,7 +322,16 @@ async function requestPasswordReset(req, res) {
     user.resetPasswordExpiry = Date.now() + 60 * 60 * 1000;
     await user.save();
 
-    await sendResetPasswordEmail(user.email, token);
+    try {
+      await sendResetPasswordEmail(user.email, token);
+    } catch (emailErr) {
+      console.warn(
+        "sendResetPasswordEmail failed:",
+        emailErr && emailErr.message
+      );
+      // still return success so user flow isn't blocked by SMTP failure
+    }
+
     return res.json({ message: "Password reset email sent." });
   } catch (err) {
     console.error("Request password reset error:", err);
@@ -381,7 +406,13 @@ async function requestMagicLink(req, res) {
   user.magicLinkExpiry = Date.now() + 15 * 60 * 1000;
   await user.save();
 
-  await sendMagicLinkEmail(user.email, token);
+  try {
+    await sendMagicLinkEmail(user.email, token);
+  } catch (emailErr) {
+    console.warn("sendMagicLinkEmail failed:", emailErr && emailErr.message);
+    // continue and return success to caller even if SMTP failed
+  }
+
   return res.json({ message: "Magic link sent! Check your email." });
 }
 
@@ -420,7 +451,7 @@ async function magicLogin(req, res) {
     const frontendUrl =
       process.env.FRONTEND_ORIGIN ||
       process.env.FRONTEND_URL ||
-      "https://px39-test-final-woad.vercel.app/";
+      "https://px39-frontend-test-1.onrender.com";
 
     return res
       .cookie("accessToken", accessToken, makeCookieOptions(accessMaxAge))
