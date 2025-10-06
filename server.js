@@ -123,21 +123,54 @@ app.use("/push", require("./routes/push.routes"));
 app.use("/contacts", require("./routes/contact.routes"));
 app.use("/payments", require("./routes/payments.routes"));
 app.use(
-  "/messages",
-  require("./routes/message.route") || require("./routes/message.route")
+  "/notifications",
+  (() => {
+    try {
+      return require("./routes/notifications.routes");
+    } catch (e) {
+      console.warn("Notifications route not mounted:", e.message);
+      // return a noop router so app.use won't crash
+      const r = express.Router();
+      return r;
+    }
+  })()
 );
-try {
-  app.use("/notifications", require("./routes/notifications.routes"));
-} catch (e) {
-  console.warn("Notifications route not mounted:", e.message);
-}
+
+// --- Robust messages route mounting (fix for MODULE_NOT_FOUND) ---
+// Try several common filenames; if none found, don't crash — just warn.
+(() => {
+  const variants = [
+    "./routes/message.routes",
+    "./routes/messages.routes",
+    "./routes/message.route",
+    "./routes/messages.route",
+    "./routes/messageRoutes",
+  ];
+  let mounted = false;
+  for (const p of variants) {
+    try {
+      const r = require(p);
+      app.use("/messages", r);
+      console.log(`Mounted messages route from ${p}`);
+      mounted = true;
+      break;
+    } catch (err) {
+      // continue trying other variants
+    }
+  }
+  if (!mounted) {
+    console.warn(
+      "Messages route not mounted: none of the expected files found (tried message.routes/messages.routes/message.route)."
+    );
+  }
+})();
 
 // ——————— 4. Root Test Route ———————
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-// ——————— 5. HTTP server and Socket.IO ———————
+// ——————— 5. Create HTTP server and Socket.IO ———————
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -153,7 +186,7 @@ const io = new Server(server, {
 
 app.set("io", io);
 
-// Presence tracking (same as your original)
+/* Presence tracking (unchanged) */
 const onlineUsers = new Map();
 function addOnline(userId, socketId) {
   const id = String(userId);

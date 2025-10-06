@@ -1,9 +1,11 @@
 // backend/utils/email.js
 const nodemailer = require("nodemailer");
 
+// Read and normalize env values
 const port = Number(process.env.SMTP_PORT) || 587;
 const secure = port === 465; // secure true for port 465
 
+// Create transporter with sensible timeouts and TLS options
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port,
@@ -17,13 +19,28 @@ const transporter = nodemailer.createTransport({
   greetingTimeout: 10000,
   socketTimeout: 10000,
   tls: {
-    rejectUnauthorized: true,
+    // NOTE: setting rejectUnauthorized: false relaxes certificate validation.
+    // Use only if you have connection issues and understand the implications.
+    rejectUnauthorized: false,
   },
 });
 
+// Attempt to verify transporter at startup (non-fatal)
+transporter
+  .verify()
+  .then(() => {
+    console.log("nodemailer: transporter verified");
+  })
+  .catch((err) => {
+    console.warn(
+      "nodemailer: verify failed (will still attempt sends):",
+      err && (err.message || err)
+    );
+  });
+
+// ---------- Email template ----------
 function emailTemplate(content) {
-  return `
-<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
@@ -69,11 +86,10 @@ function emailTemplate(content) {
     </div>
   </div>
 </body>
-</html>
-`;
+</html>`;
 }
 
-// helper that races sendMail against a timeout to avoid long hangs
+// ---------- Utility: send with timeout ----------
 async function sendMailWithTimeout(mailOptions, timeout = 10000) {
   return Promise.race([
     transporter.sendMail(mailOptions),
@@ -83,9 +99,30 @@ async function sendMailWithTimeout(mailOptions, timeout = 10000) {
   ]);
 }
 
-async function sendVerificationEmail(to, token) {
-  const verifyUrl = `${process.env.FRONTEND_URL}/auth/verify?token=${token}`;
+// ---------- Backend URL fallback ----------
+function resolvedBackendUrl() {
+  // prefer explicit BACKEND_URL if not obviously local
+  const envUrl = process.env.BACKEND_URL;
+  if (envUrl && !envUrl.includes("localhost"))
+    return envUrl.replace(/\/+$/, "");
+  // Render provides RENDER_EXTERNAL_URL in some contexts
+  if (process.env.RENDER_EXTERNAL_URL)
+    return `https://${process.env.RENDER_EXTERNAL_URL}`;
+  // fallback to FRONTEND_URL if present (not ideal, but better than localhost)
+  if (
+    process.env.FRONTEND_URL &&
+    !process.env.FRONTEND_URL.includes("localhost")
+  )
+    return process.env.FRONTEND_URL.replace(/\/+$/, "");
+  // last resort: localhost (useful for dev)
+  return "http://localhost:4000";
+}
 
+// ---------- Exports: send functions ----------
+async function sendVerificationEmail(to, token) {
+  const verifyUrl = `${(
+    process.env.FRONTEND_URL || resolvedBackendUrl()
+  ).replace(/\/+$/, "")}/auth/verify?token=${token}`;
   const content = `
     <h1>Verify Your Email Address</h1>
     <p>Welcome to PX39! To complete your registration, please verify your email address by clicking the button below:</p>
@@ -95,7 +132,6 @@ async function sendVerificationEmail(to, token) {
     <div class="divider"></div>
     <p>This verification link will expire in 24 hours.</p>
   `;
-
   return sendMailWithTimeout({
     from: `"PX39" <${process.env.SMTP_USER}>`,
     to,
@@ -105,8 +141,9 @@ async function sendVerificationEmail(to, token) {
 }
 
 async function sendResetPasswordEmail(to, token) {
-  const resetUrl = `${process.env.FRONTEND_URL}/auth/reset-password?token=${token}`;
-
+  const resetUrl = `${(
+    process.env.FRONTEND_URL || resolvedBackendUrl()
+  ).replace(/\/+$/, "")}/auth/reset-password?token=${token}`;
   const content = `
     <h1>Reset Your Password</h1>
     <p>We received a request to reset your PX39 account password. Click the button below to set a new password:</p>
@@ -116,7 +153,6 @@ async function sendResetPasswordEmail(to, token) {
     <div class="divider"></div>
     <p>This link is valid for 1 hour. If you didn't request a password reset, please ignore this email.</p>
   `;
-
   return sendMailWithTimeout({
     from: `"PX39" <${process.env.SMTP_USER}>`,
     to,
@@ -126,8 +162,8 @@ async function sendResetPasswordEmail(to, token) {
 }
 
 async function sendMagicLinkEmail(to, token) {
-  const link = `${process.env.BACKEND_URL}/auth/magic?token=${token}`;
-
+  const backend = resolvedBackendUrl();
+  const link = `${backend.replace(/\/+$/, "")}/auth/magic?token=${token}`;
   const content = `
     <h1>Your PX39 Login Link</h1>
     <p>Click the button below to securely log in to your PX39 account:</p>
@@ -137,7 +173,6 @@ async function sendMagicLinkEmail(to, token) {
     <div class="divider"></div>
     <p>For security reasons, this link will expire in 15 minutes and can only be used once.</p>
   `;
-
   return sendMailWithTimeout({
     from: `"PX39" <${process.env.SMTP_USER}>`,
     to,
@@ -154,7 +189,6 @@ async function sendInboundContactEmail({ name, email, phone = "", message }) {
     );
     return;
   }
-
   const content = `
     <h1>New Contact Message</h1>
     <p><strong>From:</strong> ${name} &lt;${email}&gt;</p>
@@ -168,7 +202,6 @@ async function sendInboundContactEmail({ name, email, phone = "", message }) {
     <div class="divider"></div>
     <p>Visit your admin panel to respond or create a support thread.</p>
   `;
-
   return sendMailWithTimeout({
     from: `"PX39" <${process.env.SMTP_USER}>`,
     to: adminTo,
@@ -179,7 +212,6 @@ async function sendInboundContactEmail({ name, email, phone = "", message }) {
 
 async function sendContactAutoReply({ to, name, message }) {
   if (!to) return;
-
   const replyContent = message
     ? `<h1>Reply from PX39 Support</h1>
        <p>Hi ${name || "there"},</p>
@@ -194,7 +226,6 @@ async function sendContactAutoReply({ to, name, message }) {
        <p>Thanks for contacting PX39. We've received your message and our team will reply within 24 hours.</p>
        <div class="divider"></div>
        <p>If you need to add more details, just reply to this email.</p>`;
-
   return sendMailWithTimeout({
     from: `"PX39" <${process.env.SMTP_USER}>`,
     to,
