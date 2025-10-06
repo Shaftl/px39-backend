@@ -53,15 +53,15 @@ async function register(req, res) {
     newUser.verificationTokenExpiry = Date.now() + 60 * 60 * 1000;
     await newUser.save();
 
-    // TRY SENDING EMAIL BUT DO NOT FAIL REGISTRATION IF EMAIL SEND FAILS
+    // send email but don't fail registration if SMTP fails
     try {
+      // FRONTEND URL used in verify link is read inside sendVerificationEmail
       await sendVerificationEmail(newUser.email, token);
     } catch (emailErr) {
       console.warn(
         "sendVerificationEmail failed:",
-        emailErr && emailErr.message
+        emailErr && (emailErr.message || emailErr)
       );
-      // do not return an error — registration should succeed even if SMTP is misconfigured
     }
 
     return res.status(201).json({
@@ -185,9 +185,8 @@ async function resendVerification(req, res) {
     } catch (emailErr) {
       console.warn(
         "sendVerificationEmail (resend) failed:",
-        emailErr && emailErr.message
+        emailErr && (emailErr.message || emailErr)
       );
-      // still return success to user — they can ask admin or check logs
     }
 
     return res.json({
@@ -327,9 +326,8 @@ async function requestPasswordReset(req, res) {
     } catch (emailErr) {
       console.warn(
         "sendResetPasswordEmail failed:",
-        emailErr && emailErr.message
+        emailErr && (emailErr.message || emailErr)
       );
-      // still return success so user flow isn't blocked by SMTP failure
     }
 
     return res.json({ message: "Password reset email sent." });
@@ -406,11 +404,22 @@ async function requestMagicLink(req, res) {
   user.magicLinkExpiry = Date.now() + 15 * 60 * 1000;
   await user.save();
 
+  // ensure BACKEND_URL is correct for the environment — fallback to request host
+  if (
+    !process.env.BACKEND_URL ||
+    process.env.BACKEND_URL.includes("localhost")
+  ) {
+    const computed = `${req.protocol}://${req.get("host")}`;
+    process.env.BACKEND_URL = process.env.BACKEND_URL || computed;
+  }
+
   try {
     await sendMagicLinkEmail(user.email, token);
   } catch (emailErr) {
-    console.warn("sendMagicLinkEmail failed:", emailErr && emailErr.message);
-    // continue and return success to caller even if SMTP failed
+    console.warn(
+      "sendMagicLinkEmail failed:",
+      emailErr && (emailErr.message || emailErr)
+    );
   }
 
   return res.json({ message: "Magic link sent! Check your email." });

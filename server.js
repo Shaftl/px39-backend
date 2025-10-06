@@ -19,14 +19,16 @@ const app = express();
 // IMPORTANT: behind a proxy (Render, etc.)
 app.set("trust proxy", 1);
 
-// Configure frontend origins via environment
-// Note: default origins don't include a trailing slash so they match req.headers.origin exactly.
-const FRONTEND_ORIGIN =
-  process.env.FRONTEND_ORIGIN || "https://px39-test-final.vercel.app";
-const FRONTEND_URL = process.env.FRONTEND_URL || FRONTEND_ORIGIN;
+// Normalize frontend origins (remove trailing slashes)
+const FRONTEND_ORIGIN = (
+  process.env.FRONTEND_ORIGIN || "https://px39-frontend-test-1.onrender.com"
+).replace(/\/+$/, "");
+const FRONTEND_URL = (process.env.FRONTEND_URL || FRONTEND_ORIGIN).replace(
+  /\/+$/,
+  ""
+);
 
-// Project slug used to allow vercel preview domains that contain your project name.
-// You can set PROJECT_SLUG in environment to be exact, otherwise fallback to a short 'px39' substring.
+// Optional project slug used for allowing vercel preview domains
 const PROJECT_SLUG = process.env.PROJECT_SLUG || "px39";
 
 // ——————— 1. Connect to MongoDB ———————
@@ -51,7 +53,6 @@ app.use(express.json());
 app.use(cookieParser());
 
 // ====== START: robust CORS for multiple origins ======
-// Base allowed origins (explicit from env + common dev hosts)
 const allowedOrigins = new Set([
   FRONTEND_URL,
   FRONTEND_ORIGIN,
@@ -59,41 +60,26 @@ const allowedOrigins = new Set([
   "http://127.0.0.1:3000",
 ]);
 
-/**
- * originAllowed: allow:
- *  - requests with no Origin (server-to-server)
- *  - exact origins present in allowedOrigins
- *  - Vercel preview subdomains that contain your project substring (e.g. px39)
- */
 function originAllowed(origin) {
-  if (!origin) return true; // allow non-browser requests
-
-  // exact match first
+  if (!origin) return true; // allow server-to-server or curl without Origin
   if (allowedOrigins.has(origin)) return true;
-
-  // attempt to parse hostname (graceful)
   try {
     const u = new URL(origin);
     const hostname = u.hostname.toLowerCase();
-
-    // allow vercel preview domains that contain your project slug/substring
     if (hostname.endsWith(".vercel.app") && hostname.includes(PROJECT_SLUG)) {
       return true;
     }
-
     return false;
   } catch (e) {
     return false;
   }
 }
 
-// CORS middleware: dynamically sets Access-Control-Allow-* headers for allowed origins
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (!origin) return next();
 
   if (originAllowed(origin)) {
-    // make sure proxy caches don't mix origins
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
@@ -105,7 +91,6 @@ app.use((req, res, next) => {
       "Access-Control-Allow-Headers",
       "Content-Type,Authorization,X-Requested-With"
     );
-    // quick debug log (remove if too verbose)
     console.log(`CORS: allowed origin ${origin} for ${req.method} ${req.url}`);
     if (req.method === "OPTIONS") return res.sendStatus(200);
     return next();
@@ -114,7 +99,7 @@ app.use((req, res, next) => {
     return res.status(403).json({ error: "CORS origin not allowed" });
   }
 });
-// ====== END: robust CORS for multiple origins ======
+// ====== END CORS ======
 
 app.use(helmet());
 app.use(
@@ -137,7 +122,10 @@ app.use("/imagekit", require("./routes/imagekit.routes"));
 app.use("/push", require("./routes/push.routes"));
 app.use("/contacts", require("./routes/contact.routes"));
 app.use("/payments", require("./routes/payments.routes"));
-app.use("/messages", require("./routes/message.routes"));
+app.use(
+  "/messages",
+  require("./routes/message.route") || require("./routes/message.route")
+);
 try {
   app.use("/notifications", require("./routes/notifications.routes"));
 } catch (e) {
@@ -149,7 +137,7 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-// ——————— 5. Create HTTP server and Socket.IO ———————
+// ——————— 5. HTTP server and Socket.IO ———————
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -165,7 +153,7 @@ const io = new Server(server, {
 
 app.set("io", io);
 
-/* Presence tracking (unchanged) */
+// Presence tracking (same as your original)
 const onlineUsers = new Map();
 function addOnline(userId, socketId) {
   const id = String(userId);
@@ -264,6 +252,53 @@ io.on("connection", (socket) => {
       console.error("socket disconnect cleanup error:", err);
     }
   });
+});
+
+// ===== Ensure CORS headers on errors and add process handlers =====
+app.use((err, req, res, next) => {
+  try {
+    const origin = req.headers.origin;
+    if (origin && originAllowed(origin)) {
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader(
+        "Access-Control-Allow-Methods",
+        "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+      );
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type,Authorization,X-Requested-With"
+      );
+    }
+
+    console.error(
+      "Unhandled request error:",
+      err && (err.stack || err.message || err)
+    );
+    if (!res.headersSent) {
+      const status = (err && err.status) || 500;
+      return res.status(status).json({ error: err?.message || "Server error" });
+    }
+    return next(err);
+  } catch (inner) {
+    console.error("Error-handling middleware failure:", inner);
+    if (!res.headersSent)
+      return res.status(500).json({ error: "Server error" });
+    return next(inner);
+  }
+});
+
+process.on("unhandledRejection", (reason, p) => {
+  console.error(
+    "UNHANDLED REJECTION at:",
+    p,
+    "reason:",
+    reason && (reason.stack || reason)
+  );
+});
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err && (err.stack || err));
 });
 
 // ——————— 6. Start the server ———————
