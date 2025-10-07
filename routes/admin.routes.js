@@ -70,6 +70,87 @@ router.get("/stats", async (req, res) => {
   }
 });
 
+// --- TEMP DEBUG ROUTES (paste directly under app.use(cookieParser()); ) ---
+app.get("/debug-auth", (req, res) => {
+  try {
+    const info = {
+      now: new Date().toISOString(),
+      originHeader: req.get("origin") || null,
+      hostHeader: req.get("host") || null,
+      referrer: req.get("referer") || req.get("referrer") || null,
+      cookieHeader: req.get("cookie") || null,
+      cookiesParsed: req.cookies || {},
+      hasAccessTokenCookie: !!(
+        req.cookies &&
+        (req.cookies.accessToken || req.cookies.token)
+      ),
+      authorizationHeader: req.get("authorization") || null,
+      remoteIp:
+        req.ip || (req.connection && req.connection.remoteAddress) || null,
+      url: req.originalUrl,
+      method: req.method,
+      protocol: req.protocol,
+      env: {
+        NODE_ENV: process.env.NODE_ENV || null,
+        FRONTEND_URL: process.env.FRONTEND_URL || null,
+        FRONTEND_ORIGIN: process.env.FRONTEND_ORIGIN || null,
+        BACKEND_URL: process.env.BACKEND_URL || null,
+      },
+      corsAllowed: (() => {
+        const origin = req.get("origin");
+        if (!origin) return null;
+        try {
+          // re-run same originAllowed logic lightly (best-effort)
+          const allowed = (() => {
+            const allowedOrigins = new Set([
+              process.env.FRONTEND_URL,
+              process.env.FRONTEND_ORIGIN,
+              "http://localhost:3000",
+              "http://127.0.0.1:3000",
+            ]);
+            if (allowedOrigins.has(origin)) return true;
+            try {
+              const u = new URL(origin);
+              const hostname = u.hostname.toLowerCase();
+              const projectSlug = "px39-test-final";
+              if (
+                hostname.endsWith(".vercel.app") &&
+                hostname.includes(projectSlug)
+              )
+                return true;
+            } catch (e) {}
+            return false;
+          })();
+          return allowed;
+        } catch (e) {
+          return null;
+        }
+      })(),
+    };
+    return res.json(info);
+  } catch (err) {
+    console.error("DEBUG /debug-auth error:", err);
+    return res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// quick helper to set a test cookie using same production options (temporary)
+// GET /debug-set-test-cookie?name=foo
+app.get("/debug-set-test-cookie", (req, res) => {
+  const name = req.query.name || "testToken";
+  const value = "debug-" + Math.random().toString(36).slice(2, 9);
+  const isProd = process.env.NODE_ENV === "production";
+  const cookieOpts = {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
+    maxAge: 24 * 60 * 60 * 1000,
+    path: "/",
+  };
+  res.cookie(name, value, cookieOpts);
+  return res.json({ ok: true, name, value, cookieOpts });
+});
+
 // Admin: orders listing + status update
 router.get("/orders", orderController.getAllOrders);
 router.patch("/orders/:id/status", orderController.updateOrderStatus);
