@@ -1,3 +1,4 @@
+// server.js (final)
 require("dotenv").config();
 const express = require("express");
 const http = require("http");
@@ -19,17 +20,10 @@ const app = express();
 // IMPORTANT: behind a proxy (Render, etc.)
 app.set("trust proxy", 1);
 
-// Normalize frontend origins (remove trailing slashes)
-const FRONTEND_ORIGIN = (
-  process.env.FRONTEND_ORIGIN || "https://px39-frontend-test-1.onrender.com"
-).replace(/\/+$/, "");
-const FRONTEND_URL = (process.env.FRONTEND_URL || FRONTEND_ORIGIN).replace(
-  /\/+$/,
-  ""
-);
-
-// Optional project slug used for allowing vercel preview domains
-const PROJECT_SLUG = process.env.PROJECT_SLUG || "px39";
+// Configure frontend origins via environment
+const FRONTEND_ORIGIN =
+  process.env.FRONTEND_ORIGIN || "https://px39-frontend-test-1.onrender.com/";
+const FRONTEND_URL = process.env.FRONTEND_URL || FRONTEND_ORIGIN;
 
 // ——————— 1. Connect to MongoDB ———————
 const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/px39";
@@ -52,7 +46,92 @@ mongoose.connection.on("disconnected", () =>
 app.use(express.json());
 app.use(cookieParser());
 
+// --- TEMP DEBUG ROUTES (non-invasive) ---
+// These are intentionally here (after cookieParser) so req.cookies is available.
+// Remove these once we've debugged CORS/cookies.
+app.get("/debug-auth", (req, res) => {
+  try {
+    const info = {
+      now: new Date().toISOString(),
+      originHeader: req.get("origin") || null,
+      hostHeader: req.get("host") || null,
+      referrer: req.get("referer") || req.get("referrer") || null,
+      cookieHeader: req.get("cookie") || null,
+      cookiesParsed: req.cookies || {},
+      hasAccessTokenCookie: !!(
+        req.cookies &&
+        (req.cookies.accessToken || req.cookies.token)
+      ),
+      authorizationHeader: req.get("authorization") || null,
+      remoteIp:
+        req.ip || (req.connection && req.connection.remoteAddress) || null,
+      url: req.originalUrl,
+      method: req.method,
+      protocol: req.protocol,
+      env: {
+        NODE_ENV: process.env.NODE_ENV || null,
+        FRONTEND_URL: process.env.FRONTEND_URL || null,
+        FRONTEND_ORIGIN: process.env.FRONTEND_ORIGIN || null,
+        BACKEND_URL: process.env.BACKEND_URL || null,
+      },
+      corsAllowed: (() => {
+        const origin = req.get("origin");
+        if (!origin) return null;
+        try {
+          // re-run same originAllowed logic lightly (best-effort)
+          const allowed = (() => {
+            const allowedOrigins = new Set([
+              process.env.FRONTEND_URL,
+              process.env.FRONTEND_ORIGIN,
+              "http://localhost:3000",
+              "http://127.0.0.1:3000",
+            ]);
+            if (allowedOrigins.has(origin)) return true;
+            try {
+              const u = new URL(origin);
+              const hostname = u.hostname.toLowerCase();
+              const projectSlug = "px39-test-final";
+              if (
+                hostname.endsWith(".vercel.app") &&
+                hostname.includes(projectSlug)
+              )
+                return true;
+            } catch (e) {}
+            return false;
+          })();
+          return allowed;
+        } catch (e) {
+          return null;
+        }
+      })(),
+    };
+    return res.json(info);
+  } catch (err) {
+    console.error("DEBUG /debug-auth error:", err);
+    return res.status(500).json({ ok: false, error: String(err) });
+  }
+});
+
+// quick helper to set a test cookie using same production options (temporary)
+// GET /debug-set-test-cookie?name=accessToken
+app.get("/debug-set-test-cookie", (req, res) => {
+  const name = req.query.name || "testToken";
+  const value = "debug-" + Math.random().toString(36).slice(2, 9);
+  const isProd = process.env.NODE_ENV === "production";
+  const cookieOpts = {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "none" : "lax",
+    maxAge: 24 * 60 * 60 * 1000,
+    path: "/",
+  };
+  res.cookie(name, value, cookieOpts);
+  return res.json({ ok: true, name, value, cookieOpts });
+});
+// --- end debug routes ---
+
 // ====== START: robust CORS for multiple origins ======
+// Base allowed origins (explicit from env + common dev hosts)
 const allowedOrigins = new Set([
   FRONTEND_URL,
   FRONTEND_ORIGIN,
@@ -60,26 +139,43 @@ const allowedOrigins = new Set([
   "http://127.0.0.1:3000",
 ]);
 
+/**
+ * originAllowed: allow:
+ *  - requests with no Origin (server-to-server)
+ *  - exact origins present in allowedOrigins
+ *  - Vercel preview subdomains that contain your project slug (e.g. px39-test-final-*)
+ */
 function originAllowed(origin) {
-  if (!origin) return true; // allow server-to-server or curl without Origin
+  if (!origin) return true; // allow non-browser requests
+
+  // exact match first
   if (allowedOrigins.has(origin)) return true;
+
+  // attempt to parse hostname (graceful)
   try {
     const u = new URL(origin);
     const hostname = u.hostname.toLowerCase();
-    if (hostname.endsWith(".vercel.app") && hostname.includes(PROJECT_SLUG)) {
+
+    // allow vercel preview domains that contain your project slug
+    // replace 'px39-test-final' with your actual project base if different
+    const projectSlug = "px39-test-final";
+    if (hostname.endsWith(".vercel.app") && hostname.includes(projectSlug)) {
       return true;
     }
+
     return false;
   } catch (e) {
     return false;
   }
 }
 
+// CORS middleware: dynamically sets Access-Control-Allow-* headers for allowed origins
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (!origin) return next();
 
   if (originAllowed(origin)) {
+    // make sure proxy caches don't mix origins
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Credentials", "true");
@@ -91,6 +187,7 @@ app.use((req, res, next) => {
       "Access-Control-Allow-Headers",
       "Content-Type,Authorization,X-Requested-With"
     );
+    // quick debug log (remove if too verbose)
     console.log(`CORS: allowed origin ${origin} for ${req.method} ${req.url}`);
     if (req.method === "OPTIONS") return res.sendStatus(200);
     return next();
@@ -99,7 +196,7 @@ app.use((req, res, next) => {
     return res.status(403).json({ error: "CORS origin not allowed" });
   }
 });
-// ====== END CORS ======
+// ====== END: robust CORS for multiple origins ======
 
 app.use(helmet());
 app.use(
@@ -121,49 +218,18 @@ app.use("/orders", require("./routes/order.routes"));
 app.use("/imagekit", require("./routes/imagekit.routes"));
 app.use("/push", require("./routes/push.routes"));
 app.use("/contacts", require("./routes/contact.routes"));
+// Corrected the messages route require — ensure filename matches your repo
+try {
+  app.use("/messages", require("./routes/message.routes"));
+} catch (e) {
+  console.warn("Messages route not mounted (missing file?):", e.message);
+}
 app.use("/payments", require("./routes/payments.routes"));
-app.use(
-  "/notifications",
-  (() => {
-    try {
-      return require("./routes/notifications.routes");
-    } catch (e) {
-      console.warn("Notifications route not mounted:", e.message);
-      // return a noop router so app.use won't crash
-      const r = express.Router();
-      return r;
-    }
-  })()
-);
-
-// --- Robust messages route mounting (fix for MODULE_NOT_FOUND) ---
-// Try several common filenames; if none found, don't crash — just warn.
-(() => {
-  const variants = [
-    "./routes/message.routes",
-    "./routes/messages.routes",
-    "./routes/message.route",
-    "./routes/messages.route",
-    "./routes/messageRoutes",
-  ];
-  let mounted = false;
-  for (const p of variants) {
-    try {
-      const r = require(p);
-      app.use("/messages", r);
-      console.log(`Mounted messages route from ${p}`);
-      mounted = true;
-      break;
-    } catch (err) {
-      // continue trying other variants
-    }
-  }
-  if (!mounted) {
-    console.warn(
-      "Messages route not mounted: none of the expected files found (tried message.routes/messages.routes/message.route)."
-    );
-  }
-})();
+try {
+  app.use("/notifications", require("./routes/notifications.routes"));
+} catch (e) {
+  console.warn("Notifications route not mounted:", e.message);
+}
 
 // ——————— 4. Root Test Route ———————
 app.get("/", (req, res) => {
@@ -285,53 +351,6 @@ io.on("connection", (socket) => {
       console.error("socket disconnect cleanup error:", err);
     }
   });
-});
-
-// ===== Ensure CORS headers on errors and add process handlers =====
-app.use((err, req, res, next) => {
-  try {
-    const origin = req.headers.origin;
-    if (origin && originAllowed(origin)) {
-      res.setHeader("Vary", "Origin");
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Access-Control-Allow-Credentials", "true");
-      res.setHeader(
-        "Access-Control-Allow-Methods",
-        "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-      );
-      res.setHeader(
-        "Access-Control-Allow-Headers",
-        "Content-Type,Authorization,X-Requested-With"
-      );
-    }
-
-    console.error(
-      "Unhandled request error:",
-      err && (err.stack || err.message || err)
-    );
-    if (!res.headersSent) {
-      const status = (err && err.status) || 500;
-      return res.status(status).json({ error: err?.message || "Server error" });
-    }
-    return next(err);
-  } catch (inner) {
-    console.error("Error-handling middleware failure:", inner);
-    if (!res.headersSent)
-      return res.status(500).json({ error: "Server error" });
-    return next(inner);
-  }
-});
-
-process.on("unhandledRejection", (reason, p) => {
-  console.error(
-    "UNHANDLED REJECTION at:",
-    p,
-    "reason:",
-    reason && (reason.stack || reason)
-  );
-});
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT EXCEPTION:", err && (err.stack || err));
 });
 
 // ——————— 6. Start the server ———————
