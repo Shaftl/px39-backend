@@ -1,26 +1,68 @@
+// backend/routes/auth.routes.js
 const express = require("express");
 const router = express.Router();
-const {
-  register,
-  verifyEmail,
-  resendVerification,
-  login,
-  refreshToken,
-  requestPasswordReset,
-  resetPassword,
-  logout,
-  getSessions,
-  requestMagicLink,
-  magicLogin,
 
-  setAvatarUrl,
-  revokeSession,
-  updateProfile,
-  deleteAccount,
-} = require("../controllers/auth.controller");
+// require the controller module as a whole (safer for detecting missing exports)
+const authController = require("../controllers/auth.controller") || {};
+
+/**
+ * Helper: return the real handler if it's a function,
+ * otherwise return a fallback that responds 500 and log a warning.
+ */
+function ensureHandler(fn, name) {
+  if (typeof fn === "function") return fn;
+  console.warn(
+    `auth.routes: handler "${name}" is missing or not a function — using fallback responder`
+  );
+  return (req, res) =>
+    res
+      .status(500)
+      .json({
+        message: `Server misconfiguration: auth handler "${name}" unavailable.`,
+      });
+}
+
+// pick handlers (these names are the ones routes expect)
+const register = ensureHandler(authController.register, "register");
+const verifyEmail = ensureHandler(authController.verifyEmail, "verifyEmail");
+const resendVerification = ensureHandler(
+  authController.resendVerification,
+  "resendVerification"
+);
+const login = ensureHandler(authController.login, "login");
+const refreshToken = ensureHandler(authController.refreshToken, "refreshToken");
+const requestPasswordReset = ensureHandler(
+  authController.requestPasswordReset,
+  "requestPasswordReset"
+);
+const resetPassword = ensureHandler(
+  authController.resetPassword,
+  "resetPassword"
+);
+const logout = ensureHandler(authController.logout, "logout");
+const getSessions = ensureHandler(authController.getSessions, "getSessions");
+const requestMagicLink = ensureHandler(
+  authController.requestMagicLink,
+  "requestMagicLink"
+);
+const magicLogin = ensureHandler(authController.magicLogin, "magicLogin");
+const setAvatarUrl = ensureHandler(authController.setAvatarUrl, "setAvatarUrl");
+const revokeSession = ensureHandler(
+  authController.revokeSession,
+  "revokeSession"
+);
+const updateProfile = ensureHandler(
+  authController.updateProfile,
+  "updateProfile"
+);
+const deleteAccount = ensureHandler(
+  authController.deleteAccount,
+  "deleteAccount"
+);
+
 const authMiddleware = require("../middleware/auth.middleware");
 
-// JSON parser
+// JSON parser for this router
 router.use(express.json());
 
 // Public endpoints
@@ -43,12 +85,12 @@ router.get("/me", authMiddleware, (req, res) => {
 
 router.put("/avatar", authMiddleware, setAvatarUrl);
 
-// **Session management** (now with authMiddleware)
+// Session management
 router.get("/sessions", authMiddleware, getSessions);
 router.delete("/sessions/:tokenId", authMiddleware, revokeSession);
 
 // Protected endpoints
-router.put("/me", authMiddleware, updateProfile); // ← new
-router.delete("/me", authMiddleware, deleteAccount); // ← new
+router.put("/me", authMiddleware, updateProfile);
+router.delete("/me", authMiddleware, deleteAccount);
 
 module.exports = router;
