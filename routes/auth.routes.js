@@ -2,12 +2,22 @@
 const express = require("express");
 const router = express.Router();
 
-// require the controller module as a whole (safer for detecting missing exports)
-const authController = require("../controllers/auth.controller") || {};
+// try requiring controller; if it throws, capture and continue with an empty object
+let authController = {};
+try {
+  authController = require("../controllers/auth.controller") || {};
+} catch (err) {
+  console.warn(
+    "auth.routes: failed to require ../controllers/auth.controller — continuing with fallbacks. Error:",
+    err && err.message
+  );
+  authController = {};
+}
 
 /**
- * Helper: return the real handler if it's a function,
- * otherwise return a fallback that responds 500 and log a warning.
+ * ensureHandler(fn, name)
+ * - returns fn when it's a function
+ * - otherwise returns a fallback handler that responds 500 and logs a useful message
  */
 function ensureHandler(fn, name) {
   if (typeof fn === "function") return fn;
@@ -22,7 +32,7 @@ function ensureHandler(fn, name) {
       });
 }
 
-// pick handlers (these names are the ones routes expect)
+// list expected handlers (names must match controller exports)
 const register = ensureHandler(authController.register, "register");
 const verifyEmail = ensureHandler(authController.verifyEmail, "verifyEmail");
 const resendVerification = ensureHandler(
@@ -60,9 +70,23 @@ const deleteAccount = ensureHandler(
   "deleteAccount"
 );
 
-const authMiddleware = require("../middleware/auth.middleware");
+const authMiddleware = (() => {
+  try {
+    return require("../middleware/auth.middleware");
+  } catch (err) {
+    // fallback middleware that returns 500 if auth.middleware is missing
+    console.warn(
+      "auth.routes: failed to require auth.middleware — requests using auth will fail. Error:",
+      err && err.message
+    );
+    return (req, res, next) =>
+      res
+        .status(500)
+        .json({ message: "Server misconfiguration: auth middleware missing." });
+  }
+})();
 
-// JSON parser for this router
+// JSON parser
 router.use(express.json());
 
 // Public endpoints
@@ -85,11 +109,11 @@ router.get("/me", authMiddleware, (req, res) => {
 
 router.put("/avatar", authMiddleware, setAvatarUrl);
 
-// Session management
+// **Session management**
 router.get("/sessions", authMiddleware, getSessions);
 router.delete("/sessions/:tokenId", authMiddleware, revokeSession);
 
-// Protected endpoints
+// Protected profile endpoints
 router.put("/me", authMiddleware, updateProfile);
 router.delete("/me", authMiddleware, deleteAccount);
 
