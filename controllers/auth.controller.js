@@ -55,8 +55,8 @@ async function register(req, res) {
 
     // send email but don't fail registration if SMTP fails
     try {
-      // FRONTEND URL used in verify link is read inside sendVerificationEmail
-      await sendVerificationEmail(newUser.email, token);
+      // <-- PASS req so email helper can build correct runtime FRONTEND URL if BACKEND_URL wasn't set
+      await sendVerificationEmail(newUser.email, token, req);
     } catch (emailErr) {
       console.warn(
         "sendVerificationEmail failed:",
@@ -181,7 +181,8 @@ async function resendVerification(req, res) {
     await user.save();
 
     try {
-      await sendVerificationEmail(user.email, token);
+      // <-- PASS req so runtime frontend resolution is correct
+      await sendVerificationEmail(user.email, token, req);
     } catch (emailErr) {
       console.warn(
         "sendVerificationEmail (resend) failed:",
@@ -322,7 +323,8 @@ async function requestPasswordReset(req, res) {
     await user.save();
 
     try {
-      await sendResetPasswordEmail(user.email, token);
+      // <-- PASS req so email helper constructs the right frontend reset link
+      await sendResetPasswordEmail(user.email, token, req);
     } catch (emailErr) {
       console.warn(
         "sendResetPasswordEmail failed:",
@@ -414,7 +416,8 @@ async function requestMagicLink(req, res) {
   }
 
   try {
-    await sendMagicLinkEmail(user.email, token);
+    // <-- PASS req so email helper builds link to actual deployed backend
+    await sendMagicLinkEmail(user.email, token, req);
   } catch (emailErr) {
     console.warn(
       "sendMagicLinkEmail failed:",

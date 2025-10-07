@@ -20,10 +20,23 @@ const app = express();
 // IMPORTANT: behind a proxy (Render, etc.)
 app.set("trust proxy", 1);
 
-// Configure frontend origins via environment
-const FRONTEND_ORIGIN =
-  process.env.FRONTEND_ORIGIN || "https://px39-frontend-test-1.onrender.com/";
-const FRONTEND_URL = process.env.FRONTEND_URL || FRONTEND_ORIGIN;
+// Normalize an origin string (remove trailing slash)
+function normalizeOrigin(o) {
+  if (!o) return o;
+  try {
+    return o.replace(/\/+$/, "");
+  } catch {
+    return o;
+  }
+}
+
+// Configure frontend origins via environment (normalize to avoid mismatch)
+const FRONTEND_ORIGIN = normalizeOrigin(
+  process.env.FRONTEND_ORIGIN || "https://px39-frontend-test-1.onrender.com"
+);
+const FRONTEND_URL = normalizeOrigin(
+  process.env.FRONTEND_URL || FRONTEND_ORIGIN
+);
 
 // ——————— 1. Connect to MongoDB ———————
 const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/px39";
@@ -81,8 +94,8 @@ app.get("/debug-auth", (req, res) => {
           // re-run same originAllowed logic lightly (best-effort)
           const allowed = (() => {
             const allowedOrigins = new Set([
-              process.env.FRONTEND_URL,
-              process.env.FRONTEND_ORIGIN,
+              normalizeOrigin(process.env.FRONTEND_URL),
+              normalizeOrigin(process.env.FRONTEND_ORIGIN),
               "http://localhost:3000",
               "http://127.0.0.1:3000",
             ]);
@@ -132,12 +145,14 @@ app.get("/debug-set-test-cookie", (req, res) => {
 
 // ====== START: robust CORS for multiple origins ======
 // Base allowed origins (explicit from env + common dev hosts)
-const allowedOrigins = new Set([
-  FRONTEND_URL,
-  FRONTEND_ORIGIN,
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-]);
+const allowedOrigins = new Set(
+  [
+    normalizeOrigin(FRONTEND_URL),
+    normalizeOrigin(FRONTEND_ORIGIN),
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+  ].filter(Boolean)
+);
 
 /**
  * originAllowed: allow:
@@ -148,8 +163,10 @@ const allowedOrigins = new Set([
 function originAllowed(origin) {
   if (!origin) return true; // allow non-browser requests
 
+  const norm = normalizeOrigin(origin);
+
   // exact match first
-  if (allowedOrigins.has(origin)) return true;
+  if (allowedOrigins.has(norm)) return true;
 
   // attempt to parse hostname (graceful)
   try {
@@ -157,7 +174,6 @@ function originAllowed(origin) {
     const hostname = u.hostname.toLowerCase();
 
     // allow vercel preview domains that contain your project slug
-    // replace 'px39-test-final' with your actual project base if different
     const projectSlug = "px39-test-final";
     if (hostname.endsWith(".vercel.app") && hostname.includes(projectSlug)) {
       return true;
