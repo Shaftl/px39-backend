@@ -9,9 +9,9 @@ const cors = require("cors");
 const path = require("path");
 const { Server } = require("socket.io");
 
-const authRoutes = require("./routes/auth.routes");
-const adminRoutes = require("./routes/admin.routes");
-const publicProductRoutes = require("./routes/products.routes");
+const authRoutes = "./routes/auth.routes";
+const adminRoutes = "./routes/admin.routes";
+const publicProductRoutes = "./routes/products.routes";
 
 const User = require("./models/User");
 
@@ -33,33 +33,26 @@ console.log("User model loaded:", !!User);
 app.use(express.json());
 app.use(cookieParser());
 
-// --- minimal CORS fix: trim trailing slashes and match incoming origin exactly ---
+// ======= CORS: trim trailing slash & exact-match incoming origin =======
 const trimSlash = (s) => (typeof s === "string" ? s.replace(/\/+$/, "") : s);
-
 const configuredFrontendOrigin = trimSlash(
   process.env.FRONTEND_ORIGIN || "https://px39-test-final-woad.vercel.app"
 );
 const configuredFrontendUrl = trimSlash(process.env.FRONTEND_URL || "");
 
-// Use a function so the server responds with the exact incoming Origin (no trailing slash mismatch)
+const allowedOrigins = [
+  configuredFrontendOrigin,
+  configuredFrontendUrl,
+  "http://localhost:3000",
+].filter(Boolean);
+
 app.use(
   cors({
     origin: (incomingOrigin, callback) => {
-      // allow non-browser requests (no Origin header)
+      // allow tools / server-to-server (no Origin header)
       if (!incomingOrigin) return callback(null, true);
-
       const incomingClean = trimSlash(incomingOrigin);
-
-      // allow if matches FRONTEND_ORIGIN or FRONTEND_URL or localhost dev
-      if (
-        incomingClean === configuredFrontendOrigin ||
-        (configuredFrontendUrl && incomingClean === configuredFrontendUrl) ||
-        incomingClean === "http://localhost:3000"
-      ) {
-        return callback(null, true);
-      }
-
-      // otherwise reject
+      if (allowedOrigins.includes(incomingClean)) return callback(null, true);
       console.warn("Blocked CORS origin:", incomingOrigin, "=>", incomingClean);
       return callback(new Error("Not allowed by CORS"));
     },
@@ -73,7 +66,10 @@ app.use(
     methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
   })
 );
-// --- end minimal CORS fix ---
+
+// ensure preflight handled
+app.options("*", cors());
+// ======= end CORS changes =======
 
 app.use(helmet());
 app.use(
@@ -84,29 +80,54 @@ app.use(
   })
 );
 
+// --- helper to safely require & mount routes (prevents path-to-regexp crash) ---
+function safeMount(routePath, modulePath) {
+  try {
+    const r = require(modulePath);
+    app.use(routePath, r);
+    console.log(`Mounted ${modulePath} at ${routePath}`);
+  } catch (err) {
+    console.error(
+      `Failed to mount ${modulePath} at ${routePath}:`,
+      err && err.message ? err.message : err
+    );
+    // log full error stack to help debugging
+    console.error(err && err.stack ? err.stack : err);
+  }
+}
+
 // ——————— 3. Mount routes ———————
-app.use("/auth", authRoutes);
-app.use("/admin", adminRoutes);
-app.use("/products", publicProductRoutes);
-// in backend/app.js or server.js (where routes are registered)
-app.use("/user", require("./routes/recentlyViewed.routes"));
+safeMount("/auth", authRoutes);
+safeMount("/admin", adminRoutes);
+safeMount("/products", publicProductRoutes);
 
-app.use("/api/wishlist", require("./routes/wishlist.routes"));
-app.use("/cart", require("./routes/cart.routes"));
-const orderRoutes = require("./routes/order.routes");
-app.use("/orders", orderRoutes);
-app.use("/imagekit", require("./routes/imagekit.routes"));
-app.use("/push", require("./routes/push.routes"));
-app.use("/contacts", require("./routes/contact.routes"));
-app.use("/payments", require("./routes/payments.routes"));
-
-app.use("/messages", require("./routes/message.routes"));
-// mount notifications (if file exists)
+// other routes (kept same paths) — wrap each require to avoid crash if one file is bad
 try {
-  app.use("/notifications", require("./routes/notifications.routes"));
+  safeMount("/user", "./routes/recentlyViewed.routes");
+  safeMount("/api/wishlist", "./routes/wishlist.routes");
+  safeMount("/cart", "./routes/cart.routes");
+  safeMount("/orders", "./routes/order.routes");
+  safeMount("/imagekit", "./routes/imagekit.routes");
+  safeMount("/push", "./routes/push.routes");
+  safeMount("/contacts", "./routes/contact.routes");
+  safeMount("/payments", "./routes/payments.routes");
+  safeMount("/messages", "./routes/message.routes");
 } catch (e) {
-  // If notifications route not present, just keep going (helps safe deploy)
-  console.warn("Notifications route not mounted:", e.message);
+  // safeMount already logs; keep this catch to be extra-safe
+  console.warn(
+    "Some optional route failed to mount:",
+    e && e.message ? e.message : e
+  );
+}
+
+// mount notifications (if file exists) — keep behaviour but safe
+try {
+  safeMount("/notifications", "./routes/notifications.routes");
+} catch (e) {
+  console.warn(
+    "Notifications route not mounted:",
+    e && e.message ? e.message : e
+  );
 }
 
 // ——————— 4. Root Test Route ———————
@@ -118,8 +139,7 @@ app.get("/", (req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    // use the same sanitized FRONTEND_ORIGIN for socket.io
-    origin: configuredFrontendOrigin,
+    origin: allowedOrigins, // socket.io accepts array
     credentials: true,
   },
 });
