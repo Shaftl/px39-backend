@@ -1,5 +1,3 @@
-// backend/controllers/auth.controller.js
-
 require("dotenv").config();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -12,6 +10,24 @@ const { createAccessToken, createRefreshToken } = require("../utils/token");
 const { sendVerificationEmail } = require("../utils/email");
 const { sendResetPasswordEmail } = require("../utils/email");
 const { sendMagicLinkEmail } = require("../utils/email");
+
+// Helper: cookie options (consistent, production-ready for cross-site)
+const isProd = process.env.NODE_ENV === "production";
+function cookieOptions(maxAge) {
+  return {
+    httpOnly: true,
+    secure: isProd, // must be true in production for SameSite=None to work
+    sameSite: isProd ? "none" : "strict", // allow cross-site in prod
+    maxAge,
+  };
+}
+function clearCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: isProd ? "none" : "strict",
+  };
+}
 
 // ─── POST /auth/register ───────────────────────────────────────────────────────
 async function register(req, res) {
@@ -60,45 +76,6 @@ async function register(req, res) {
   }
 }
 
-// async function register(req, res) {
-//   try {
-//     const { username, email, password } = req.body;
-//     if (!username || !email || !password) {
-//       return res
-//         .status(400)
-//         .json({ message: "Username, email, and password are required." });
-//     }
-
-//     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
-//     if (existingUser) {
-//       return res
-//         .status(409)
-//         .json({ message: "Username or email already in use." });
-//     }
-
-//     const salt = await bcrypt.genSalt(12);
-//     const passwordHash = await bcrypt.hash(password, salt);
-//     const newUser = await User.create({ username, email, passwordHash });
-
-//     const token = crypto.randomBytes(32).toString("hex");
-//     newUser.verificationToken = token;
-//     newUser.verificationTokenExpiry = Date.now() + 60 * 60 * 1000;
-//     await newUser.save();
-
-//     await sendVerificationEmail(newUser.email, token);
-
-//     return res.status(201).json({
-//       message:
-//         "Registration successful! Please check your email to verify your account.",
-//     });
-//   } catch (err) {
-//     console.error("Registration error:", err);
-//     return res
-//       .status(500)
-//       .json({ message: "Server error during registration." });
-//   }
-// }
-
 // ─── POST /auth/verify-email ─────────────────────────────────────────────────
 async function verifyEmail(req, res) {
   try {
@@ -144,18 +121,8 @@ async function verifyEmail(req, res) {
     // ───────────────────────────────────────────────────────────────────────────
 
     return res
-      .cookie("accessToken", accessToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-        maxAge: accessMaxAge, // ← replaced hard-coded
-      })
-      .cookie("refreshToken", refreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-        maxAge: refreshMaxAge, // ← replaced hard-coded
-      })
+      .cookie("accessToken", accessToken, cookieOptions(accessMaxAge))
+      .cookie("refreshToken", refreshToken, cookieOptions(refreshMaxAge))
       .json({
         message: "Email verified and logged in successfully.",
         user: {
@@ -287,18 +254,8 @@ async function login(req, res) {
     // ───────────────────────────────────────────────────────────────────────────
 
     return res
-      .cookie("accessToken", accessToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-        maxAge: accessMaxAge,
-      })
-      .cookie("refreshToken", refreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-        maxAge: refreshMaxAge,
-      })
+      .cookie("accessToken", accessToken, cookieOptions(accessMaxAge))
+      .cookie("refreshToken", refreshToken, cookieOptions(refreshMaxAge))
       .json({
         message: "Logged in successfully.",
         user: {
@@ -314,85 +271,6 @@ async function login(req, res) {
     return res.status(500).json({ message: "Server error during login." });
   }
 }
-
-// async function login(req, res) {
-//   try {
-//     const { email, password } = req.body;
-//     if (!email || !password) {
-//       return res
-//         .status(400)
-//         .json({ message: "Email and password are required." });
-//     }
-
-//     const user = await User.findOne({ email });
-//     if (!user || user.status !== "active") {
-//       return res.status(401).json({ message: "Invalid credentials." });
-//     }
-
-//     if (!user.emailVerified) {
-//       return res
-//         .status(403)
-//         .json({ message: "Please verify your email before logging in." });
-//     }
-
-//     const isMatch = await bcrypt.compare(password, user.passwordHash);
-//     if (!isMatch) {
-//       return res.status(401).json({ message: "Invalid credentials." });
-//     }
-
-//     // 1. Issue tokens
-//     const payload = { userId: user._id, role: user.role };
-//     const accessToken = createAccessToken(payload);
-//     const refreshToken = createRefreshToken(payload);
-
-//     // 2. Parse User-Agent
-//     const parser = new UAParser(req.get("User-Agent"));
-//     const ua = parser.getResult();
-
-//     // 3. Save session entry
-//     user.sessions.push({
-//       tokenId: `${user.sessions.length + 1}-${Date.now()}`,
-//       ip: req.ip || req.connection.remoteAddress,
-//       browser: `${ua.browser.name || "Unknown"} ${
-//         ua.browser.version || ""
-//       }`.trim(),
-//       os: `${ua.os.name || "Unknown"} ${ua.os.version || ""}`.trim(),
-//       device: ua.device.type || "Desktop",
-//     });
-//     await user.save();
-
-//     // ─── sync cookie maxAge with your .env ────────────────────────────────────
-//     const accessMaxAge = ms(process.env.ACCESS_TOKEN_EXPIRES_IN || "15m");
-//     const refreshMaxAge = ms(process.env.REFRESH_TOKEN_EXPIRES_IN || "7d");
-//     // ───────────────────────────────────────────────────────────────────────────
-
-//     return res
-//       .cookie("accessToken", accessToken, {
-//         httpOnly: true,
-//         secure: process.env.NODE_ENV === "production",
-//         sameSite: "strict",
-//         maxAge: accessMaxAge,
-//       })
-//       .cookie("refreshToken", refreshToken, {
-//         httpOnly: true,
-//         secure: process.env.NODE_ENV === "production",
-//         sameSite: "strict",
-//         maxAge: refreshMaxAge,
-//       })
-//       .json({
-//         message: "Logged in successfully.",
-//         user: {
-//           id: user._id,
-//           username: user.username,
-//           email: user.email,
-//           role: user.role,
-//         },
-//       });
-//   } catch (err) {
-//     console.error("Login error:", err);
-//     return res.status(500).json({ message: "Server error during login." });
-//   }
-// }
 
 async function setAvatarUrl(req, res) {
   try {
@@ -437,18 +315,8 @@ async function refreshToken(req, res) {
     // ───────────────────────────────────────────────────────────────────────────
 
     return res
-      .cookie("accessToken", newAccessToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-        maxAge: accessMaxAge,
-      })
-      .cookie("refreshToken", newRefreshToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-        maxAge: refreshMaxAge,
-      })
+      .cookie("accessToken", newAccessToken, cookieOptions(accessMaxAge))
+      .cookie("refreshToken", newRefreshToken, cookieOptions(refreshMaxAge))
       .json({ message: "Tokens refreshed." });
   } catch (err) {
     console.error("Refresh token error:", err);
@@ -518,8 +386,8 @@ async function resetPassword(req, res) {
 async function logout(req, res) {
   try {
     return res
-      .clearCookie("accessToken")
-      .clearCookie("refreshToken")
+      .clearCookie("accessToken", clearCookieOptions())
+      .clearCookie("refreshToken", clearCookieOptions())
       .json({ message: "Logged out successfully." });
   } catch (err) {
     console.error("Logout error:", err);
@@ -597,17 +465,11 @@ async function magicLogin(req, res) {
     // ───────────────────────────────────────────────────────────────────────────
 
     return res
-      .cookie("accessToken", accessToken, {
-        httpOnly: true,
-        sameSite: "strict",
-        maxAge: accessMaxAge,
-      })
-      .cookie("refreshToken", refreshToken, {
-        httpOnly: true,
-        sameSite: "strict",
-        maxAge: refreshMaxAge,
-      })
-      .redirect(`${process.env.FRONTEND_URL}/`);
+      .cookie("accessToken", accessToken, cookieOptions(accessMaxAge))
+      .cookie("refreshToken", refreshToken, cookieOptions(refreshMaxAge))
+      .redirect(
+        `${process.env.FRONTEND_URL || process.env.FRONTEND_ORIGIN || "/"}`
+      );
   } catch (err) {
     console.error("Magic login error:", err);
     return res.status(500).send("Server error during magic login.");
@@ -643,8 +505,10 @@ async function deleteAccount(req, res) {
     // Soft-delete: you could also permanently remove
     await User.findByIdAndUpdate(req.user._id, { status: "deleted" });
     // clear cookies
-    res.clearCookie("accessToken").clearCookie("refreshToken");
-    return res.json({ message: "Account deleted." });
+    return res
+      .clearCookie("accessToken", clearCookieOptions())
+      .clearCookie("refreshToken", clearCookieOptions())
+      .json({ message: "Account deleted." });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: "Could not delete account." });
@@ -663,7 +527,7 @@ module.exports = {
   getSessions,
   revokeSession,
   requestMagicLink,
-  setAvatarUrl,
+  setAvatarUrl: setAvatarUrl,
   magicLogin,
   deleteAccount,
   updateProfile,

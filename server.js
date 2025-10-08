@@ -17,6 +17,13 @@ const User = require("./models/User");
 
 const app = express();
 
+/**
+ * IMPORTANT:
+ * - Trust proxy so Express knows it's behind a proxy (Render, etc.)
+ *   This is required so cookies with `secure: true` behave correctly.
+ */
+app.set("trust proxy", 1);
+
 // ——————— 1. Connect to MongoDB ———————
 const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/px39";
 mongoose
@@ -32,12 +39,19 @@ console.log("User model loaded:", !!User);
 // ——————— 2. Global Middleware ———————
 app.use(express.json());
 app.use(cookieParser());
+
+const frontendOrigin =
+  process.env.FRONTEND_ORIGIN ||
+  process.env.FRONTEND_URL ||
+  "https://px39-test-final-woad.vercel.app";
+
 app.use(
   cors({
-    origin: "https://px39-test-final-woad.vercel.app",
+    origin: frontendOrigin,
     credentials: true,
   })
 );
+
 app.use(helmet());
 app.use(
   rateLimit({
@@ -81,8 +95,7 @@ app.get("/", (req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin:
-      process.env.FRONTEND_ORIGIN || "https://px39-test-final-woad.vercel.app",
+    origin: frontendOrigin,
     credentials: true,
   },
 });
