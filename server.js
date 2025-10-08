@@ -32,12 +32,46 @@ console.log("User model loaded:", !!User);
 // ——————— 2. Global Middleware ———————
 app.use(express.json());
 app.use(cookieParser());
+
+// ==== START CORS fix (minimal & safe) ====
+const trimTrailingSlash = (u) =>
+  typeof u === "string" ? u.replace(/\/+$/, "") : u;
+
+const allowedOrigins = [
+  process.env.FRONTEND_ORIGIN, // primary, e.g. https://px39-test-final-woad.vercel.app
+  process.env.FRONTEND_URL, // alternate if used
+  "http://localhost:3000", // dev
+]
+  .filter(Boolean)
+  .map(trimTrailingSlash);
+
 app.use(
   cors({
-    origin: "https://px39-test-final-woad.vercel.app/",
+    origin: (incomingOrigin, callback) => {
+      // allow non-browser (no Origin header) requests
+      if (!incomingOrigin) return callback(null, true);
+
+      const cleaned = trimTrailingSlash(incomingOrigin);
+      if (allowedOrigins.includes(cleaned)) return callback(null, true);
+
+      console.warn("Blocked CORS origin:", incomingOrigin, "=>", cleaned);
+      return callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+    ],
+    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
   })
 );
+
+// ensure preflight OPTIONS is handled
+app.options("*", cors());
+// ==== END CORS fix ====
+
 app.use(helmet());
 app.use(
   rateLimit({
@@ -81,8 +115,7 @@ app.get("/", (req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin:
-      process.env.FRONTEND_ORIGIN || "https://px39-test-final-woad.vercel.app",
+    origin: allowedOrigins, // array of sanitized origins
     credentials: true,
   },
 });
