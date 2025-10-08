@@ -1,3 +1,4 @@
+// server.js (updated - simplified permissive CORS)
 require("dotenv").config();
 const express = require("express");
 const http = require("http");
@@ -7,6 +8,7 @@ const rateLimit = require("express-rate-limit");
 const cookieParser = require("cookie-parser");
 const path = require("path");
 const { Server } = require("socket.io");
+const cors = require("cors");
 
 const authRoutes = require("./routes/auth.routes");
 const adminRoutes = require("./routes/admin.routes");
@@ -52,53 +54,17 @@ mongoose.connection.on("disconnected", () =>
 app.use(express.json());
 app.use(cookieParser());
 
-// ====== START: robust CORS for multiple origins ======
-const allowedOrigins = new Set([
-  FRONTEND_URL,
-  FRONTEND_ORIGIN,
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-]);
-
-function originAllowed(origin) {
-  if (!origin) return true; // allow server-to-server or curl without Origin
-  if (allowedOrigins.has(origin)) return true;
-  try {
-    const u = new URL(origin);
-    const hostname = u.hostname.toLowerCase();
-    if (hostname.endsWith(".vercel.app") && hostname.includes(PROJECT_SLUG)) {
-      return true;
-    }
-    return false;
-  } catch (e) {
-    return false;
-  }
-}
-
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (!origin) return next();
-
-  if (originAllowed(origin)) {
-    res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Access-Control-Allow-Credentials", "true");
-    res.setHeader(
-      "Access-Control-Allow-Methods",
-      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-    );
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type,Authorization,X-Requested-With"
-    );
-    console.log(`CORS: allowed origin ${origin} for ${req.method} ${req.url}`);
-    if (req.method === "OPTIONS") return res.sendStatus(200);
-    return next();
-  } else {
-    console.warn(`CORS: blocked origin ${origin} for ${req.method} ${req.url}`);
-    return res.status(403).json({ error: "CORS origin not allowed" });
-  }
-});
+// ====== START: simplified permissive CORS ======
+// Replace the previous strict/complex CORS logic with a permissive CORS
+// configuration so requests from any origin are accepted (allows credentials).
+// This prevents the server from blocking legitimate frontend requests during
+// development and from restrictive origin checks.
+app.use(
+  cors({
+    origin: true, // reflect requester origin — allows all origins
+    credentials: true,
+  })
+);
 // ====== END CORS ======
 
 app.use(helmet());
@@ -175,11 +141,7 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: function (origin, cb) {
-      if (!origin) return cb(null, true);
-      if (originAllowed(origin)) return cb(null, true);
-      return cb(new Error("Not allowed by CORS"));
-    },
+    origin: true, // accept requests from any origin (reflect origin)
     credentials: true,
   },
 });
@@ -287,24 +249,9 @@ io.on("connection", (socket) => {
   });
 });
 
-// ===== Ensure CORS headers on errors and add process handlers =====
+// ===== Error handler (removed origin checks; kept behavior) =====
 app.use((err, req, res, next) => {
   try {
-    const origin = req.headers.origin;
-    if (origin && originAllowed(origin)) {
-      res.setHeader("Vary", "Origin");
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Access-Control-Allow-Credentials", "true");
-      res.setHeader(
-        "Access-Control-Allow-Methods",
-        "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-      );
-      res.setHeader(
-        "Access-Control-Allow-Headers",
-        "Content-Type,Authorization,X-Requested-With"
-      );
-    }
-
     console.error(
       "Unhandled request error:",
       err && (err.stack || err.message || err)
