@@ -1,252 +1,238 @@
 // backend/utils/email.js
+// Minimal, robust email helper: prefer SendGrid (API) on Render, fallback to SMTP via nodemailer.
+
 const nodemailer = require("nodemailer");
 
-const emailTemplate = (content) => `...`;
-// NOTE: to keep the message short here I won't repeat the full long HTML template.
-// Replace the `...` above with your existing large template string (the same one you posted).
-// For convenience I've kept the same template logic below but you should paste the full HTML template
-// you already have in your repo. (If you want, I can paste the full template verbatim.)
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
+const FROM_ADDRESS =
+  process.env.SMTP_USER || process.env.EMAIL_USER || "no-reply@px39.example";
 
-/**
- * Create transporter based on environment variables.
- * - Supports explicit SMTP_HOST/SMTP_PORT/SMTP_SECURE/SERVER/TLS settings
- * - Or you can set USE_GMAIL=true to use nodemailer's service:'gmail'
- */
-function createTransporter() {
+// Small minimal HTML template (name + link/token only)
+function simpleTemplate({ title, bodyHtml }) {
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>${title}</title>
+  </head>
+  <body>
+    <div>
+      ${bodyHtml}
+    </div>
+  </body>
+</html>`;
+}
+
+/* ---------------- SendGrid (preferred on Render) ---------------- */
+async function sendViaSendGrid({ from, to, subject, html }) {
+  if (!SENDGRID_API_KEY) throw new Error("SENDGRID_API_KEY not configured");
+  const body = {
+    personalizations: [
+      {
+        to: Array.isArray(to) ? to.map((t) => ({ email: t })) : [{ email: to }],
+        subject,
+      },
+    ],
+    from: { email: from || FROM_ADDRESS },
+    content: [{ type: "text/html", value: html }],
+  };
+
+  const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${SENDGRID_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    const err = new Error(
+      `SendGrid send failed: ${res.status} ${res.statusText} ${txt}`
+    );
+    err.status = res.status;
+    throw err;
+  }
+  return { ok: true, provider: "sendgrid" };
+}
+
+/* ---------------- Nodemailer SMTP fallback ---------------- */
+function createSmtpTransporter() {
   const user = process.env.SMTP_USER || process.env.EMAIL_USER;
   const pass = process.env.SMTP_PASS || process.env.EMAIL_PASS;
-  const host = process.env.SMTP_HOST;
-  const port = process.env.SMTP_PORT
-    ? Number(process.env.SMTP_PORT)
-    : undefined;
-  const secureEnv = process.env.SMTP_SECURE === "true";
-  const useGmail = process.env.USE_GMAIL === "true";
+  if (!user || !pass) return null;
 
-  if (!user || !pass) {
-    console.warn(
-      "Email: SMTP_USER / SMTP_PASS not configured. Email sending will be disabled (log-only)."
-    );
-    return null;
-  }
+  const host = process.env.SMTP_HOST || "smtp.gmail.com";
+  const port = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : 587;
+  const secure = process.env.SMTP_SECURE === "true" || port === 465;
 
-  // If USE_GMAIL is set prefer nodemailer's service option (simpler)
-  if (useGmail) {
-    return nodemailer.createTransport({
-      service: "gmail",
-      auth: { user, pass },
-      pool: true,
-    });
-  }
-
-  // default: use provided host/port (works for smtp.gmail.com as well)
-  const transporterConfig = {
-    host: host || "smtp.gmail.com",
-    port: port || 587,
-    secure: secureEnv || port === 465, // true for 465, false for 587
+  const cfg = {
+    host,
+    port,
+    secure,
     auth: { user, pass },
-    pool: true,
-    // allow Render's Node TLS behavior; do not reject unauthorized by default only if explicitly configured
+    // longer timeouts so cloud environments have some slack
+    connectionTimeout: Number(process.env.SMTP_CONN_TIMEOUT || 20000),
+    greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT || 20000),
+    socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT || 30000),
     tls: {
+      // allow disabling verification in some environments (not recommended)
       rejectUnauthorized:
         process.env.SMTP_TLS_REJECT === "false" ? false : true,
     },
   };
-
-  return nodemailer.createTransport(transporterConfig);
+  return nodemailer.createTransport(cfg);
 }
 
-const transporter = createTransporter();
+const smtpTransporter = createSmtpTransporter();
+let smtpVerified = false;
 
-/**
- * Verify transporter (non-blocking) and log useful messages. Does NOT crash the process if verification fails.
- */
-async function verifyTransporter() {
-  if (!transporter) {
-    console.warn(
-      "Email transporter not configured (missing credentials). Emails will not be sent."
-    );
+// verify SMTP if configured, but don't throw — just log
+async function verifySmtpIfPresent() {
+  if (!smtpTransporter) {
+    smtpVerified = false;
+    console.warn("[email] smtp transporter not configured (no SMTP creds)");
     return;
   }
   try {
-    await transporter.verify();
-    console.log("✅ Email transporter verified and ready.");
+    await smtpTransporter.verify();
+    smtpVerified = true;
+    console.log("[email] SMTP transporter verified");
   } catch (err) {
-    console.error(
-      "❌ Email transporter verification failed. Check SMTP credentials and network access.",
+    smtpVerified = false;
+    console.warn(
+      "[email] SMTP verify failed (will fall back to SendGrid if configured):",
       err && err.message ? err.message : err
     );
-    // Do not throw — we want the server to continue running even if email config is broken.
   }
 }
-// run verification at module load
-void verifyTransporter();
+void verifySmtpIfPresent(); // fire-and-forget
 
-/**
- * Helper to safely send email and log failures.
- */
-async function safeSendMail({ from, to, subject, html }) {
-  // if transporter not configured, log the email and return.
-  if (!transporter) {
-    console.warn(
-      "[Email] transporter not configured — logging email instead of sending:",
-      {
-        from,
+/* ---------------- unified send wrapper ---------------- */
+async function sendMail({ from, to, subject, html }) {
+  // prefer SendGrid (recommended for Render)
+  if (SENDGRID_API_KEY) {
+    try {
+      return await sendViaSendGrid({ from, to, subject, html });
+    } catch (err) {
+      console.error(
+        "[email] SendGrid send failed:",
+        err && err.message ? err.message : err
+      );
+      // if SendGrid fails, attempt SMTP as a last resort
+    }
+  }
+
+  // fallback to SMTP if available
+  if (smtpTransporter) {
+    try {
+      const info = await smtpTransporter.sendMail({
+        from: from || FROM_ADDRESS,
         to,
         subject,
-      }
-    );
-    // write a minimal log or you can write to a persistent store if you want
-    return { ok: false, logged: true };
+        html,
+      });
+      console.log(
+        `[email] sent via SMTP to ${to} messageId=${
+          info.messageId || info.response || "unknown"
+        }`
+      );
+      return { ok: true, provider: "smtp", info };
+    } catch (err) {
+      console.error(
+        "[email] SMTP send failed:",
+        err && err.message ? err.message : err
+      );
+      throw err;
+    }
   }
 
-  try {
-    const info = await transporter.sendMail({ from, to, subject, html });
-    console.log(`[Email] sent to ${to} — messageId: ${info.messageId}`);
-    return { ok: true, info };
-  } catch (err) {
-    // Nodemailer returns helpful error information; log it
-    console.error(
-      `[Email] failed to send to ${to}:`,
-      err && err.message ? err.message : err
-    );
-    if (err.response) console.error("[Email] smtp response:", err.response);
-    // bubble up the error so callers can react if needed
-    throw err;
-  }
+  // nothing available
+  const msg =
+    "[email] No provider available (SENDGRID_API_KEY not set, SMTP not configured)";
+  console.warn(msg);
+  throw new Error(msg);
 }
 
-/* ---------- Actual exported email helpers (your existing API preserved) ---------- */
+/* ---------------- exported helpers (minimal templates) ---------------- */
 
-async function sendVerificationEmail(to, token) {
-  const verifyUrl = `${process.env.FRONTEND_URL}/auth/verify?token=${token}`;
-
-  const content = `
-    <h1>Verify Your Email Address</h1>
-    <p>Welcome to PX39! To complete your registration, please verify your email address by clicking the button below:</p>
-    <div style="text-align: center;">
-      <a href="${verifyUrl}" class="button">Verify Email</a>
-    </div>
-    <div class="divider"></div>
-    <p>This verification link will expire in 24 hours.</p>
-  `;
-
-  const from = `"PX39" <${process.env.SMTP_USER || process.env.EMAIL_USER}>`;
-
-  return safeSendMail({
-    from,
+async function sendVerificationEmail(to, token, name) {
+  const verifyUrl = `${
+    process.env.FRONTEND_URL || process.env.BACKEND_URL || ""
+  }/auth/verify?token=${token}`;
+  const bodyHtml = `<p>Hi ${name || ""},</p>
+    <p>Please verify your account by clicking the link below:</p>
+    <p><a href="${verifyUrl}">${verifyUrl}</a></p>
+    <p>This link expires in 24 hours.</p>`;
+  const html = simpleTemplate({ title: "Verify your PX39 account", bodyHtml });
+  return sendMail({
+    from: FROM_ADDRESS,
     to,
-    subject: "Verify Your PX39 Account",
-    html: emailTemplate(content),
+    subject: "Verify your PX39 account",
+    html,
   });
 }
 
-async function sendResetPasswordEmail(to, token) {
-  const resetUrl = `${process.env.FRONTEND_URL}/auth/reset-password?token=${token}`;
-
-  const content = `
-    <h1>Reset Your Password</h1>
-    <p>We received a request to reset your PX39 account password. Click the button below to set a new password:</p>
-    <div style="text-align: center;">
-      <a href="${resetUrl}" class="button">Reset Password</a>
-    </div>
-    <div class="divider"></div>
-    <p>This link is valid for 1 hour. If you didn't request a password reset, please ignore this email.</p>
-  `;
-
-  const from = `"PX39" <${process.env.SMTP_USER || process.env.EMAIL_USER}>`;
-
-  return safeSendMail({
-    from,
+async function sendResetPasswordEmail(to, token, name) {
+  const resetUrl = `${
+    process.env.FRONTEND_URL || process.env.BACKEND_URL || ""
+  }/auth/reset-password?token=${token}`;
+  const bodyHtml = `<p>Hi ${name || ""},</p>
+    <p>Reset your password using the link below:</p>
+    <p><a href="${resetUrl}">${resetUrl}</a></p>
+    <p>This link is valid for 1 hour.</p>`;
+  const html = simpleTemplate({ title: "Reset your PX39 password", bodyHtml });
+  return sendMail({
+    from: FROM_ADDRESS,
     to,
-    subject: "Reset Your PX39 Password",
-    html: emailTemplate(content),
+    subject: "Reset your PX39 password",
+    html,
   });
 }
 
-async function sendMagicLinkEmail(to, token) {
-  const link = `${process.env.BACKEND_URL}/auth/magic?token=${token}`;
-
-  const content = `
-    <h1>Your PX39 Login Link</h1>
-    <p>Click the button below to securely log in to your PX39 account:</p>
-    <div style="text-align: center;">
-      <a href="${link}" class="button">Log In to PX39</a>
-    </div>
-    <div class="divider"></div>
-    <p>For security reasons, this link will expire in 15 minutes and can only be used once.</p>
-  `;
-
-  const from = `"PX39" <${process.env.SMTP_USER || process.env.EMAIL_USER}>`;
-
-  return safeSendMail({
-    from,
+async function sendMagicLinkEmail(to, token, name) {
+  const magicUrl = `${process.env.BACKEND_URL || ""}/auth/magic?token=${token}`;
+  const bodyHtml = `<p>Hi ${name || ""},</p>
+    <p>Use the link below to sign in (expires in 15 minutes):</p>
+    <p><a href="${magicUrl}">${magicUrl}</a></p>`;
+  const html = simpleTemplate({ title: "Your PX39 login link", bodyHtml });
+  return sendMail({
+    from: FROM_ADDRESS,
     to,
-    subject: "Your Secure PX39 Login Link",
-    html: emailTemplate(content),
+    subject: "Your PX39 login link",
+    html,
   });
 }
 
 async function sendInboundContactEmail({ name, email, phone = "", message }) {
-  const adminTo =
-    process.env.ADMIN_EMAIL || process.env.SMTP_USER || process.env.EMAIL_USER;
-  if (!adminTo) {
-    console.warn(
-      "sendInboundContactEmail: no ADMIN_EMAIL or SMTP_USER configured"
-    );
-    return;
-  }
-
-  const content = `
-    <h1>New Contact Message</h1>
-    <p><strong>From:</strong> ${name} &lt;${email}&gt;</p>
-    <p><strong>Phone:</strong> ${phone || "-"}</p>
-    <div class="divider"></div>
-    <p><strong>Message:</strong></p>
-    <div style="margin-top:12px;">${String(message).replace(
-      /\n/g,
-      "<br/>"
-    )}</div>
-    <div class="divider"></div>
-    <p>Visit your admin panel to respond or create a support thread.</p>
-  `;
-
-  const from = `"PX39" <${process.env.SMTP_USER || process.env.EMAIL_USER}>`;
-
-  return safeSendMail({
-    from,
+  const adminTo = process.env.ADMIN_EMAIL || FROM_ADDRESS;
+  const bodyHtml = `<p>New contact from ${name} &lt;${email}&gt;</p>
+    <p>Phone: ${phone}</p>
+    <p>Message:</p>
+    <div>${(String(message) || "").replace(/\n/g, "<br/>")}</div>`;
+  const html = simpleTemplate({ title: "New contact message", bodyHtml });
+  return sendMail({
+    from: FROM_ADDRESS,
     to: adminTo,
-    subject: `New contact message from ${name}`,
-    html: emailTemplate(content),
+    subject: `New contact from ${name}`,
+    html,
   });
 }
 
 async function sendContactAutoReply({ to, name, message }) {
-  if (!to) return;
-
-  const replyContent = message
-    ? `<h1>Reply from PX39 Support</h1>
-       <p>Hi ${name || "there"},</p>
-       <div style="margin-top:12px;">${String(message).replace(
-         /\n/g,
-         "<br/>"
-       )}</div>
-       <div class="divider"></div>
-       <p>If you'd like to continue the conversation, just reply to this email.</p>`
-    : `<h1>We received your message</h1>
-       <p>Hi ${name || "there"},</p>
-       <p>Thanks for contacting PX39. We've received your message and our team will reply within 24 hours.</p>
-       <div class="divider"></div>
-       <p>If you need to add more details, just reply to this email.</p>`;
-
-  const from = `"PX39" <${process.env.SMTP_USER || process.env.EMAIL_USER}>`;
-
-  return safeSendMail({
-    from,
+  const bodyHtml = `<p>Hi ${name || ""},</p>
+    <p>${
+      (message && String(message).replace(/\n/g, "<br/>")) ||
+      "Thanks — we got your message."
+    }</p>`;
+  const html = simpleTemplate({ title: "PX39 — reply", bodyHtml });
+  return sendMail({
+    from: FROM_ADDRESS,
     to,
-    subject: message
-      ? "Reply from PX39 Support"
-      : "We've received your message — PX39",
-    html: emailTemplate(replyContent),
+    subject: "Thanks — message received",
+    html,
   });
 }
 
@@ -256,6 +242,9 @@ module.exports = {
   sendMagicLinkEmail,
   sendInboundContactEmail,
   sendContactAutoReply,
-  // export transport and verify for debugging if you wish:
-  _internal: { transporter },
+  // debugging
+  _internal: {
+    smtpVerified: () => smtpVerified,
+    hasSendGrid: !!SENDGRID_API_KEY,
+  },
 };
