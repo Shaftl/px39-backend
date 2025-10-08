@@ -1,4 +1,3 @@
-// backend/routes/imagekit.routes.js
 const express = require("express");
 const ImageKit = require("imagekit");
 const authMiddleware = require("../middleware/auth.middleware");
@@ -47,6 +46,25 @@ router.get("/auth", authMiddleware, (req, res) => {
 });
 
 /**
+ * Public (no-auth) endpoint.
+ * This allows the frontend to fetch ImageKit auth parameters without requiring
+ * a logged-in session (useful for public uploads or when credentials/cookies
+ * aren't available). This mirrors the authenticated /auth response but does
+ * not require auth middleware.
+ */
+router.get("/auth-public", (req, res) => {
+  try {
+    const result = imagekit.getAuthenticationParameters();
+    return res.json(result);
+  } catch (err) {
+    console.error("GET /imagekit/auth-public error:", err);
+    return res
+      .status(500)
+      .json({ error: "failed to create auth params (public)" });
+  }
+});
+
+/**
  * POST /imagekit/generate-blur
  * body: { imageKitUrl: string, productId?: string, imageIndex?: number }
  * Returns: { blurDataURL: 'data:image/xxx;base64,...' }
@@ -68,7 +86,7 @@ router.post("/generate-blur", authMiddleware, async (req, res) => {
       console.error("generate-blur fetch error:", err);
       return res.status(500).json({
         error:
-          "Server does not have a fetch implementation. Install 'node-fetch' or run on Node 18+.",
+          "Server does not have a fetch implementation. Install 'node-fetch' or run on Node 18+. ",
       });
     }
 
