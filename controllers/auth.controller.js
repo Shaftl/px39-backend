@@ -1,48 +1,34 @@
+// backend/controllers/auth.controller.js
+
 require("dotenv").config();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const UAParser = require("ua-parser-js");
-const ms = require("ms");
+const ms = require("ms"); // ← added
 
 const User = require("../models/User");
 const { createAccessToken, createRefreshToken } = require("../utils/token");
-const {
-  sendVerificationEmail,
-  sendResetPasswordEmail,
-  sendMagicLinkEmail,
-} = require("../utils/email");
+const { sendVerificationEmail } = require("../utils/email");
+const { sendResetPasswordEmail } = require("../utils/email");
+const { sendMagicLinkEmail } = require("../utils/email");
 
-const isProd = process.env.NODE_ENV === "production";
-
-const makeCookieOptions = (maxAge) => ({
-  httpOnly: true,
-  secure: isProd, // must be true for SameSite=None & cross-site cookies
-  sameSite: isProd ? "none" : "lax",
-  maxAge,
-  path: "/",
-});
-
-const makeClearCookieOptions = () => ({
-  httpOnly: true,
-  secure: isProd,
-  sameSite: isProd ? "none" : "lax",
-  path: "/",
-});
-
+// ─── POST /auth/register ───────────────────────────────────────────────────────
 async function register(req, res) {
   try {
     const { username, email, password } = req.body;
-    if (!username || !email || !password)
+    if (!username || !email || !password) {
       return res
         .status(400)
         .json({ message: "Username, email, and password are required." });
+    }
 
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
-    if (existingUser)
+    if (existingUser) {
       return res
         .status(409)
         .json({ message: "Username or email already in use." });
+    }
 
     const salt = await bcrypt.genSalt(12);
     const passwordHash = await bcrypt.hash(password, salt);
@@ -53,17 +39,9 @@ async function register(req, res) {
     newUser.verificationTokenExpiry = Date.now() + 60 * 60 * 1000;
     await newUser.save();
 
-    // send email but don't fail registration if SMTP fails
-    try {
-      // FRONTEND URL used in verify link is read inside sendVerificationEmail
-      await sendVerificationEmail(newUser.email, token);
-    } catch (emailErr) {
-      console.warn(
-        "sendVerificationEmail failed:",
-        emailErr && (emailErr.message || emailErr)
-      );
-    }
+    await sendVerificationEmail(newUser.email, token);
 
+    // after await sendVerificationEmail(newUser.email, token);
     return res.status(201).json({
       message:
         "Registration successful! Please check your email to verify your account.",
@@ -82,31 +60,75 @@ async function register(req, res) {
   }
 }
 
+// async function register(req, res) {
+//   try {
+//     const { username, email, password } = req.body;
+//     if (!username || !email || !password) {
+//       return res
+//         .status(400)
+//         .json({ message: "Username, email, and password are required." });
+//     }
+
+//     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+//     if (existingUser) {
+//       return res
+//         .status(409)
+//         .json({ message: "Username or email already in use." });
+//     }
+
+//     const salt = await bcrypt.genSalt(12);
+//     const passwordHash = await bcrypt.hash(password, salt);
+//     const newUser = await User.create({ username, email, passwordHash });
+
+//     const token = crypto.randomBytes(32).toString("hex");
+//     newUser.verificationToken = token;
+//     newUser.verificationTokenExpiry = Date.now() + 60 * 60 * 1000;
+//     await newUser.save();
+
+//     await sendVerificationEmail(newUser.email, token);
+
+//     return res.status(201).json({
+//       message:
+//         "Registration successful! Please check your email to verify your account.",
+//     });
+//   } catch (err) {
+//     console.error("Registration error:", err);
+//     return res
+//       .status(500)
+//       .json({ message: "Server error during registration." });
+//   }
+// }
+
+// ─── POST /auth/verify-email ─────────────────────────────────────────────────
 async function verifyEmail(req, res) {
   try {
     const { token } = req.body;
-    if (!token)
+    if (!token) {
       return res
         .status(400)
         .json({ message: "Verification token is required." });
+    }
 
     const user = await User.findOne({
       verificationToken: token,
       verificationTokenExpiry: { $gt: Date.now() },
     });
-    if (!user)
+    if (!user) {
       return res.status(400).json({ message: "Invalid or expired token." });
+    }
 
     user.emailVerified = true;
     user.verificationToken = undefined;
     user.verificationTokenExpiry = undefined;
 
+    // Auto-login: issue tokens
     const payload = { userId: user._id, role: user.role };
     const accessToken = createAccessToken(payload);
     const refreshToken = createRefreshToken(payload);
 
     const parser = new UAParser(req.get("User-Agent"));
     const { browser, os, device } = parser.getResult();
+
     user.sessions.push({
       tokenId: `${user.sessions.length + 1}-${Date.now()}`,
       ip: req.ip || req.connection.remoteAddress,
@@ -116,12 +138,24 @@ async function verifyEmail(req, res) {
     });
     await user.save();
 
+    // ─── sync cookie maxAge with your .env ────────────────────────────────────
     const accessMaxAge = ms(process.env.ACCESS_TOKEN_EXPIRES_IN || "15m");
     const refreshMaxAge = ms(process.env.REFRESH_TOKEN_EXPIRES_IN || "7d");
+    // ───────────────────────────────────────────────────────────────────────────
 
     return res
-      .cookie("accessToken", accessToken, makeCookieOptions(accessMaxAge))
-      .cookie("refreshToken", refreshToken, makeCookieOptions(refreshMaxAge))
+      .cookie("accessToken", accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: accessMaxAge, // ← replaced hard-coded
+      })
+      .cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: refreshMaxAge, // ← replaced hard-coded
+      })
       .json({
         message: "Email verified and logged in successfully.",
         user: {
@@ -129,7 +163,7 @@ async function verifyEmail(req, res) {
           username: user.username,
           email: user.email,
           role: user.role,
-          avatarUrl: user.avatarUrl || null,
+          avatarUrl: user.avatarUrl || null, // <-- ADDED: include avatar immediately
         },
       });
   } catch (err) {
@@ -138,21 +172,27 @@ async function verifyEmail(req, res) {
   }
 }
 
+// ─── POST /auth/resend-verification ────────────────────────────────────────────
+
 async function resendVerification(req, res) {
   try {
     const { email } = req.body;
-    if (!email) return res.status(400).json({ message: "Email is required." });
+    if (!email) {
+      return res.status(400).json({ message: "Email is required." });
+    }
 
     const user = await User.findOne({ email });
-    if (!user)
+    if (!user) {
       return res
         .status(404)
         .json({ message: "No account found with that email." });
-    if (user.emailVerified)
+    }
+    if (user.emailVerified) {
       return res.status(400).json({ message: "Email is already verified." });
+    }
 
     const now = Date.now();
-    const WINDOW_MS = 30 * 1000;
+    const WINDOW_MS = 30 * 1000; // 30 seconds
 
     if (
       user.lastVerificationSent &&
@@ -174,20 +214,14 @@ async function resendVerification(req, res) {
       });
     }
 
+    // generate new token & update timestamps
     const token = crypto.randomBytes(32).toString("hex");
     user.verificationToken = token;
-    user.verificationTokenExpiry = now + 60 * 60 * 1000;
+    user.verificationTokenExpiry = now + 60 * 60 * 1000; // 1 hour
     user.lastVerificationSent = new Date(now);
     await user.save();
 
-    try {
-      await sendVerificationEmail(user.email, token);
-    } catch (emailErr) {
-      console.warn(
-        "sendVerificationEmail (resend) failed:",
-        emailErr && (emailErr.message || emailErr)
-      );
-    }
+    await sendVerificationEmail(user.email, token);
 
     return res.json({
       message: "Verification email resent. Please check your inbox.",
@@ -200,32 +234,42 @@ async function resendVerification(req, res) {
   }
 }
 
+// ─── POST /auth/login ──────────────────────────────────────────────────────────
 async function login(req, res) {
   try {
     const { email, password } = req.body;
-    if (!email || !password)
+    if (!email || !password) {
       return res
         .status(400)
         .json({ message: "Email and password are required." });
+    }
 
     const user = await User.findOne({ email });
-    if (!user || user.status !== "active")
+    if (!user || user.status !== "active") {
       return res.status(401).json({ message: "Invalid credentials." });
-    if (!user.emailVerified)
+    }
+
+    if (!user.emailVerified) {
       return res
         .status(403)
         .json({ message: "Please verify your email before logging in." });
+    }
 
     const isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!isMatch)
+    if (!isMatch) {
       return res.status(401).json({ message: "Invalid credentials." });
+    }
 
+    // 1. Issue tokens
     const payload = { userId: user._id, role: user.role };
     const accessToken = createAccessToken(payload);
     const refreshToken = createRefreshToken(payload);
 
+    // 2. Parse User-Agent
     const parser = new UAParser(req.get("User-Agent"));
     const ua = parser.getResult();
+
+    // 3. Save session entry
     user.sessions.push({
       tokenId: `${user.sessions.length + 1}-${Date.now()}`,
       ip: req.ip || req.connection.remoteAddress,
@@ -237,12 +281,24 @@ async function login(req, res) {
     });
     await user.save();
 
+    // ─── sync cookie maxAge with your .env ────────────────────────────────────
     const accessMaxAge = ms(process.env.ACCESS_TOKEN_EXPIRES_IN || "15m");
     const refreshMaxAge = ms(process.env.REFRESH_TOKEN_EXPIRES_IN || "7d");
+    // ───────────────────────────────────────────────────────────────────────────
 
     return res
-      .cookie("accessToken", accessToken, makeCookieOptions(accessMaxAge))
-      .cookie("refreshToken", refreshToken, makeCookieOptions(refreshMaxAge))
+      .cookie("accessToken", accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: accessMaxAge,
+      })
+      .cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: refreshMaxAge,
+      })
       .json({
         message: "Logged in successfully.",
         user: {
@@ -250,7 +306,7 @@ async function login(req, res) {
           username: user.username,
           email: user.email,
           role: user.role,
-          avatarUrl: user.avatarUrl || null,
+          avatarUrl: user.avatarUrl || null, // <-- ADDED: include avatar immediately
         },
       });
   } catch (err) {
@@ -258,6 +314,85 @@ async function login(req, res) {
     return res.status(500).json({ message: "Server error during login." });
   }
 }
+
+// async function login(req, res) {
+//   try {
+//     const { email, password } = req.body;
+//     if (!email || !password) {
+//       return res
+//         .status(400)
+//         .json({ message: "Email and password are required." });
+//     }
+
+//     const user = await User.findOne({ email });
+//     if (!user || user.status !== "active") {
+//       return res.status(401).json({ message: "Invalid credentials." });
+//     }
+
+//     if (!user.emailVerified) {
+//       return res
+//         .status(403)
+//         .json({ message: "Please verify your email before logging in." });
+//     }
+
+//     const isMatch = await bcrypt.compare(password, user.passwordHash);
+//     if (!isMatch) {
+//       return res.status(401).json({ message: "Invalid credentials." });
+//     }
+
+//     // 1. Issue tokens
+//     const payload = { userId: user._id, role: user.role };
+//     const accessToken = createAccessToken(payload);
+//     const refreshToken = createRefreshToken(payload);
+
+//     // 2. Parse User-Agent
+//     const parser = new UAParser(req.get("User-Agent"));
+//     const ua = parser.getResult();
+
+//     // 3. Save session entry
+//     user.sessions.push({
+//       tokenId: `${user.sessions.length + 1}-${Date.now()}`,
+//       ip: req.ip || req.connection.remoteAddress,
+//       browser: `${ua.browser.name || "Unknown"} ${
+//         ua.browser.version || ""
+//       }`.trim(),
+//       os: `${ua.os.name || "Unknown"} ${ua.os.version || ""}`.trim(),
+//       device: ua.device.type || "Desktop",
+//     });
+//     await user.save();
+
+//     // ─── sync cookie maxAge with your .env ────────────────────────────────────
+//     const accessMaxAge = ms(process.env.ACCESS_TOKEN_EXPIRES_IN || "15m");
+//     const refreshMaxAge = ms(process.env.REFRESH_TOKEN_EXPIRES_IN || "7d");
+//     // ───────────────────────────────────────────────────────────────────────────
+
+//     return res
+//       .cookie("accessToken", accessToken, {
+//         httpOnly: true,
+//         secure: process.env.NODE_ENV === "production",
+//         sameSite: "strict",
+//         maxAge: accessMaxAge,
+//       })
+//       .cookie("refreshToken", refreshToken, {
+//         httpOnly: true,
+//         secure: process.env.NODE_ENV === "production",
+//         sameSite: "strict",
+//         maxAge: refreshMaxAge,
+//       })
+//       .json({
+//         message: "Logged in successfully.",
+//         user: {
+//           id: user._id,
+//           username: user.username,
+//           email: user.email,
+//           role: user.role,
+//         },
+//       });
+//   } catch (err) {
+//     console.error("Login error:", err);
+//     return res.status(500).json({ message: "Server error during login." });
+//   }
+// }
 
 async function setAvatarUrl(req, res) {
   try {
@@ -270,34 +405,50 @@ async function setAvatarUrl(req, res) {
       { avatarUrl },
       { new: true }
     ).select("avatarUrl");
+
     return res.json({ avatarUrl: user.avatarUrl });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ message: "Could not update avatar" });
+    res.status(500).json({ message: "Could not update avatar" });
   }
 }
 
+// ─── POST /auth/refresh ────────────────────────────────────────────────────────
 async function refreshToken(req, res) {
   try {
     const token = req.cookies.refreshToken;
-    if (!token)
+    if (!token) {
       return res.status(401).json({ message: "Refresh token missing." });
+    }
 
     const payload = jwt.verify(token, process.env.REFRESH_TOKEN_SECRET);
     const user = await User.findById(payload.userId);
-    if (!user)
+    if (!user) {
       return res.status(401).json({ message: "Invalid refresh token." });
+    }
 
     const newPayload = { userId: user._id, role: user.role };
     const newAccessToken = createAccessToken(newPayload);
     const newRefreshToken = createRefreshToken(newPayload);
 
+    // ─── sync cookie maxAge with your .env ────────────────────────────────────
     const accessMaxAge = ms(process.env.ACCESS_TOKEN_EXPIRES_IN || "15m");
     const refreshMaxAge = ms(process.env.REFRESH_TOKEN_EXPIRES_IN || "7d");
+    // ───────────────────────────────────────────────────────────────────────────
 
     return res
-      .cookie("accessToken", newAccessToken, makeCookieOptions(accessMaxAge))
-      .cookie("refreshToken", newRefreshToken, makeCookieOptions(refreshMaxAge))
+      .cookie("accessToken", newAccessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: accessMaxAge,
+      })
+      .cookie("refreshToken", newRefreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        maxAge: refreshMaxAge,
+      })
       .json({ message: "Tokens refreshed." });
   } catch (err) {
     console.error("Refresh token error:", err);
@@ -307,6 +458,7 @@ async function refreshToken(req, res) {
   }
 }
 
+// ─── POST /auth/request-password-reset ─────────────────────────────────────────
 async function requestPasswordReset(req, res) {
   try {
     const { email } = req.body;
@@ -321,15 +473,7 @@ async function requestPasswordReset(req, res) {
     user.resetPasswordExpiry = Date.now() + 60 * 60 * 1000;
     await user.save();
 
-    try {
-      await sendResetPasswordEmail(user.email, token);
-    } catch (emailErr) {
-      console.warn(
-        "sendResetPasswordEmail failed:",
-        emailErr && (emailErr.message || emailErr)
-      );
-    }
-
+    await sendResetPasswordEmail(user.email, token);
     return res.json({ message: "Password reset email sent." });
   } catch (err) {
     console.error("Request password reset error:", err);
@@ -337,23 +481,27 @@ async function requestPasswordReset(req, res) {
   }
 }
 
+// ─── POST /auth/reset-password ─────────────────────────────────────────────────
 async function resetPassword(req, res) {
   try {
     const { token, newPassword } = req.body;
-    if (!token || !newPassword)
+    if (!token || !newPassword) {
       return res
         .status(400)
         .json({ message: "Token and new password are required." });
+    }
 
     const user = await User.findOne({
       resetPasswordToken: token,
       resetPasswordExpiry: { $gt: Date.now() },
     });
-    if (!user)
+    if (!user) {
       return res.status(400).json({ message: "Invalid or expired token." });
+    }
 
     const salt = await bcrypt.genSalt(12);
     user.passwordHash = await bcrypt.hash(newPassword, salt);
+
     user.resetPasswordToken = undefined;
     user.resetPasswordExpiry = undefined;
     user.sessions = [];
@@ -366,12 +514,12 @@ async function resetPassword(req, res) {
   }
 }
 
+// ─── POST /auth/logout ────────────────────────────────────────────────────────
 async function logout(req, res) {
   try {
-    const clearOpts = makeClearCookieOptions();
     return res
-      .clearCookie("accessToken", clearOpts)
-      .clearCookie("refreshToken", clearOpts)
+      .clearCookie("accessToken")
+      .clearCookie("refreshToken")
       .json({ message: "Logged out successfully." });
   } catch (err) {
     console.error("Logout error:", err);
@@ -379,10 +527,12 @@ async function logout(req, res) {
   }
 }
 
+// ─── GET /auth/sessions ───────────────────────────────────────────────────────
 async function getSessions(req, res) {
   return res.json({ sessions: req.user.sessions });
 }
 
+// ─── DELETE /auth/sessions/:tokenId ──────────────────────────────────────────
 async function revokeSession(req, res) {
   const { tokenId } = req.params;
   const user = req.user;
@@ -391,6 +541,7 @@ async function revokeSession(req, res) {
   return res.json({ message: "Session revoked." });
 }
 
+// ─── POST /auth/magic-link-request ─────────────────────────────────────────────
 async function requestMagicLink(req, res) {
   const { email } = req.body;
   if (!email) return res.status(400).json({ message: "Email is required." });
@@ -404,27 +555,11 @@ async function requestMagicLink(req, res) {
   user.magicLinkExpiry = Date.now() + 15 * 60 * 1000;
   await user.save();
 
-  // ensure BACKEND_URL is correct for the environment — fallback to request host
-  if (
-    !process.env.BACKEND_URL ||
-    process.env.BACKEND_URL.includes("localhost")
-  ) {
-    const computed = `${req.protocol}://${req.get("host")}`;
-    process.env.BACKEND_URL = process.env.BACKEND_URL || computed;
-  }
-
-  try {
-    await sendMagicLinkEmail(user.email, token);
-  } catch (emailErr) {
-    console.warn(
-      "sendMagicLinkEmail failed:",
-      emailErr && (emailErr.message || emailErr)
-    );
-  }
-
+  await sendMagicLinkEmail(user.email, token);
   return res.json({ message: "Magic link sent! Check your email." });
 }
 
+// ─── GET /auth/magic ────────────────────────────────────────────────────────────
 async function magicLogin(req, res) {
   try {
     const { token } = req.query;
@@ -434,7 +569,9 @@ async function magicLogin(req, res) {
       magicLinkToken: token,
       magicLinkExpiry: { $gt: Date.now() },
     });
-    if (!user) return res.status(400).send("Invalid or expired magic link.");
+    if (!user) {
+      return res.status(400).send("Invalid or expired magic link.");
+    }
 
     user.magicLinkToken = undefined;
     user.magicLinkExpiry = undefined;
@@ -454,24 +591,30 @@ async function magicLogin(req, res) {
     });
     await user.save();
 
+    // ─── sync cookie maxAge with your .env ────────────────────────────────────
     const accessMaxAge = ms(process.env.ACCESS_TOKEN_EXPIRES_IN || "15m");
     const refreshMaxAge = ms(process.env.REFRESH_TOKEN_EXPIRES_IN || "7d");
-
-    const frontendUrl =
-      process.env.FRONTEND_ORIGIN ||
-      process.env.FRONTEND_URL ||
-      "https://px39-test-final.vercel.app";
+    // ───────────────────────────────────────────────────────────────────────────
 
     return res
-      .cookie("accessToken", accessToken, makeCookieOptions(accessMaxAge))
-      .cookie("refreshToken", refreshToken, makeCookieOptions(refreshMaxAge))
-      .redirect(`${frontendUrl}/`);
+      .cookie("accessToken", accessToken, {
+        httpOnly: true,
+        sameSite: "strict",
+        maxAge: accessMaxAge,
+      })
+      .cookie("refreshToken", refreshToken, {
+        httpOnly: true,
+        sameSite: "strict",
+        maxAge: refreshMaxAge,
+      })
+      .redirect(`${process.env.FRONTEND_URL}/`);
   } catch (err) {
     console.error("Magic login error:", err);
     return res.status(500).send("Server error during magic login.");
   }
 }
 
+// ─── PUT /auth/me ───────────────────────────────────────────────────────────
 async function updateProfile(req, res) {
   try {
     const { username, email } = req.body;
@@ -494,13 +637,13 @@ async function updateProfile(req, res) {
   }
 }
 
+// ─── DELETE /auth/me ────────────────────────────────────────────────────────
 async function deleteAccount(req, res) {
   try {
+    // Soft-delete: you could also permanently remove
     await User.findByIdAndUpdate(req.user._id, { status: "deleted" });
-    const clearOpts = makeClearCookieOptions();
-    res
-      .clearCookie("accessToken", clearOpts)
-      .clearCookie("refreshToken", clearOpts);
+    // clear cookies
+    res.clearCookie("accessToken").clearCookie("refreshToken");
     return res.json({ message: "Account deleted." });
   } catch (err) {
     console.error(err);
