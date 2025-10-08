@@ -40,15 +40,68 @@ console.log("User model loaded:", !!User);
 app.use(express.json());
 app.use(cookieParser());
 
-const frontendOrigin =
-  process.env.FRONTEND_ORIGIN ||
-  process.env.FRONTEND_URL ||
-  "https://px39-test-final-woad.vercel.app";
+/**
+ * CORS: Support multiple frontend origins via FRONTEND_ORIGINS env var (comma-separated).
+ * Falls back to FRONTEND_ORIGIN / FRONTEND_URL single value or a small sensible default list.
+ *
+ * Example:
+ * FRONTEND_ORIGINS=https://px39-test-final-woad.vercel.app,https://px39-test-final.vercel.app,http://localhost:3000
+ */
+const rawOrigins = process.env.FRONTEND_ORIGINS || "";
+let allowedOrigins = [];
+
+if (rawOrigins && rawOrigins.trim()) {
+  allowedOrigins = rawOrigins
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+} else {
+  // fallback single env keys
+  const single = process.env.FRONTEND_ORIGIN || process.env.FRONTEND_URL;
+  if (single) allowedOrigins.push(single.trim());
+  // sensible defaults for local/dev + previously used hosts
+  allowedOrigins = allowedOrigins
+    .concat([
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "https://px39-test-final-woad.vercel.app",
+      "https://px39-test-final.vercel.app",
+    ])
+    .filter(Boolean);
+}
+
+// de-duplicate
+allowedOrigins = Array.from(new Set(allowedOrigins));
+
+console.log("CORS allowed origins:", allowedOrigins);
 
 app.use(
   cors({
-    origin: frontendOrigin,
+    origin: function (origin, callback) {
+      // allow same-origin server requests (no origin), tools like curl, or server-to-server
+      if (!origin) return callback(null, true);
+      // if origin exactly matches any allowed origin, allow it
+      if (allowedOrigins.indexOf(origin) !== -1) {
+        return callback(null, true);
+      }
+      // otherwise block
+      const msg = `CORS policy: origin '${origin}' is not allowed by server.`;
+      console.warn(msg);
+      return callback(new Error(msg), false);
+    },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "x-imagekit-key",
+      "X-Requested-With",
+      "Accept",
+      "Origin",
+      "Referer",
+    ],
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
   })
 );
 
@@ -65,7 +118,6 @@ app.use(
 app.use("/auth", authRoutes);
 app.use("/admin", adminRoutes);
 app.use("/products", publicProductRoutes);
-// in backend/app.js or server.js (where routes are registered)
 app.use("/user", require("./routes/recentlyViewed.routes"));
 
 app.use("/api/wishlist", require("./routes/wishlist.routes"));
@@ -82,7 +134,6 @@ app.use("/messages", require("./routes/message.routes"));
 try {
   app.use("/notifications", require("./routes/notifications.routes"));
 } catch (e) {
-  // If notifications route not present, just keep going (helps safe deploy)
   console.warn("Notifications route not mounted:", e.message);
 }
 
@@ -93,10 +144,22 @@ app.get("/", (req, res) => {
 
 // ——————— 5. Create HTTP server and Socket.IO ———————
 const server = http.createServer(app);
+
+// socket.io CORS: mirror same allowedOrigins (socket.io accepts array or boolean)
+const ioCorsOrigins = allowedOrigins.length ? allowedOrigins : true;
+
 const io = new Server(server, {
   cors: {
-    origin: frontendOrigin,
+    origin: ioCorsOrigins,
     credentials: true,
+    methods: ["GET", "POST"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "x-imagekit-key",
+      "X-Requested-With",
+      "Accept",
+    ],
   },
 });
 

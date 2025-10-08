@@ -12,6 +12,22 @@ const imagekit = new ImageKit({
 });
 
 /**
+ * Utility: set CORS allow-origin to requesting origin (only if present)
+ * This is an extra safety-net for environments where proxy strips CORS.
+ */
+function setAllowOriginIfPresent(req, res) {
+  try {
+    const origin = req.get("origin");
+    if (origin) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
+/**
  * Helper: obtain a fetch implementation.
  * - Prefer global fetch (Node 18+ / Node 22).
  * - If not present, dynamically import node-fetch (only when needed).
@@ -33,10 +49,11 @@ async function getFetch() {
 }
 
 /**
- * Authenticated endpoint (unchanged)
+ * Authenticated endpoint
  */
 router.get("/auth", authMiddleware, (req, res) => {
   try {
+    setAllowOriginIfPresent(req, res);
     const result = imagekit.getAuthenticationParameters();
     return res.json(result);
   } catch (err) {
@@ -54,6 +71,7 @@ router.get("/auth", authMiddleware, (req, res) => {
  */
 router.get("/auth-public", (req, res) => {
   try {
+    setAllowOriginIfPresent(req, res);
     const result = imagekit.getAuthenticationParameters();
     return res.json(result);
   } catch (err) {
@@ -99,26 +117,6 @@ router.post("/generate-blur", authMiddleware, async (req, res) => {
     const mime = r.headers.get("content-type") || "image/webp";
     const base64 = buf.toString("base64");
     const blurDataURL = `data:${mime};base64,${base64}`;
-
-    // Optional: store blurDataURL into product doc on server-side (keeps your existing commented logic)
-    /*
-    if (productId) {
-      try {
-        const p = await Product.findById(productId);
-        if (p) {
-          p.variations = p.variations || [];
-          const v = p.variations[0] || {};
-          v.lqips = v.lqips || [];
-          if (typeof imageIndex === "number") v.lqips[imageIndex] = blurDataURL;
-          else v.lqips.push(blurDataURL);
-          p.variations[0] = v;
-          await p.save();
-        }
-      } catch (e) {
-        console.warn("Failed to save blurDataURL to product:", e.message);
-      }
-    }
-    */
 
     return res.json({ blurDataURL });
   } catch (err) {
