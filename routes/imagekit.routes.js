@@ -1,7 +1,6 @@
 // backend/routes/imagekit.routes.js
 const express = require("express");
 const ImageKit = require("imagekit");
-const fetch = require("node-fetch"); // safe for Node <18; if Node>=18 you may remove this line
 const authMiddleware = require("../middleware/auth.middleware");
 // const Product = require("../models/Product"); // uncomment if you want server-side saving
 
@@ -14,7 +13,28 @@ const imagekit = new ImageKit({
 });
 
 /**
- * Authenticated endpoint (unchanged behavior)
+ * Helper: obtain a fetch implementation.
+ * - Prefer global fetch (Node 18+ / Node 22).
+ * - If not present, dynamically import node-fetch (only when needed).
+ *   This avoids a hard crash at require-time on hosts that don't have node-fetch.
+ */
+async function getFetch() {
+  if (typeof fetch !== "undefined") return fetch;
+  try {
+    const mod = await import("node-fetch");
+    // node-fetch v3 uses default export
+    return mod.default || mod;
+  } catch (err) {
+    // bubble a clear error for callers
+    throw new Error(
+      "No fetch available. Install 'node-fetch' or run on Node 18+. Dynamic import failed: " +
+        err.message
+    );
+  }
+}
+
+/**
+ * Authenticated endpoint (unchanged)
  */
 router.get("/auth", authMiddleware, (req, res) => {
   try {
@@ -22,33 +42,6 @@ router.get("/auth", authMiddleware, (req, res) => {
     return res.json(result);
   } catch (err) {
     console.error("GET /imagekit/auth error:", err);
-    return res.status(500).json({ error: "failed to create auth params" });
-  }
-});
-
-/**
- * Public fallback endpoint (new)
- *
- * Purpose: deployed frontend sometimes cannot send auth cookie across origins;
- * this endpoint returns ImageKit auth parameters without requiring the auth cookie.
- *
- * SECURITY: by default it's open. If you want minimal protection set
- * IMAGEKIT_PUBLIC_AUTH_KEY in backend env and callers must send header:
- *   x-imagekit-key: <IMAGEKIT_PUBLIC_AUTH_KEY>
- */
-router.get("/auth-public", (req, res) => {
-  try {
-    if (process.env.IMAGEKIT_PUBLIC_AUTH_KEY) {
-      const incoming = req.header("x-imagekit-key");
-      if (!incoming || incoming !== process.env.IMAGEKIT_PUBLIC_AUTH_KEY) {
-        return res.status(403).json({ error: "forbidden" });
-      }
-    }
-
-    const result = imagekit.getAuthenticationParameters();
-    return res.json(result);
-  } catch (err) {
-    console.error("GET /imagekit/auth-public error:", err);
     return res.status(500).json({ error: "failed to create auth params" });
   }
 });
@@ -64,9 +57,22 @@ router.post("/generate-blur", authMiddleware, async (req, res) => {
     if (!imageKitUrl)
       return res.status(400).json({ error: "imageKitUrl required" });
 
+    // Request very small optimized image from ImageKit (16px width)
     const tinyUrl = `${imageKitUrl}?tr=w-16,fo-auto,fl-lossy,f-webp,q-40`;
 
-    const r = await fetch(tinyUrl);
+    // get a fetch implementation (global or dynamic)
+    let fetchImpl;
+    try {
+      fetchImpl = await getFetch();
+    } catch (err) {
+      console.error("generate-blur fetch error:", err);
+      return res.status(500).json({
+        error:
+          "Server does not have a fetch implementation. Install 'node-fetch' or run on Node 18+.",
+      });
+    }
+
+    const r = await fetchImpl(tinyUrl);
     if (!r.ok)
       return res.status(502).json({ error: "failed to fetch tiny image" });
 
@@ -76,7 +82,7 @@ router.post("/generate-blur", authMiddleware, async (req, res) => {
     const base64 = buf.toString("base64");
     const blurDataURL = `data:${mime};base64,${base64}`;
 
-    // optional server-side save commented out (keeps your original logic)
+    // Optional: store blurDataURL into product doc on server-side (keeps your existing commented logic)
     /*
     if (productId) {
       try {
