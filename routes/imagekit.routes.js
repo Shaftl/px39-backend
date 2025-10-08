@@ -1,6 +1,7 @@
 // backend/routes/imagekit.routes.js
 const express = require("express");
 const ImageKit = require("imagekit");
+const fetch = require("node-fetch"); // safe for Node <18; if Node>=18 you may remove this line
 const authMiddleware = require("../middleware/auth.middleware");
 // const Product = require("../models/Product"); // uncomment if you want server-side saving
 
@@ -13,35 +14,44 @@ const imagekit = new ImageKit({
 });
 
 /**
- * Helper: get a fetch implementation.
- * - Use global fetch if available (Node 18+ / Node 22 has it).
- * - Otherwise attempt dynamic import of 'node-fetch' (only if installed).
- *   If that also fails, handler will return 500 and explain the missing dependency.
+ * Authenticated endpoint (unchanged behavior)
  */
-async function getFetch() {
-  if (typeof fetch !== "undefined") return fetch;
-  // dynamic import only when needed (so module load doesn't throw)
+router.get("/auth", authMiddleware, (req, res) => {
   try {
-    const mod = await import("node-fetch");
-    // node-fetch v3 default export is the function
-    return mod.default || mod;
-  } catch (err) {
-    // rethrow to be handled by caller
-    throw new Error(
-      "No fetch available. Install 'node-fetch' or use Node 18+. Dynamic import failed: " +
-        err.message
-    );
-  }
-}
-
-router.get(
-  "/auth",
-  authMiddleware,
-  /* permitRoles("admin"), */ (req, res) => {
     const result = imagekit.getAuthenticationParameters();
-    res.json(result);
+    return res.json(result);
+  } catch (err) {
+    console.error("GET /imagekit/auth error:", err);
+    return res.status(500).json({ error: "failed to create auth params" });
   }
-);
+});
+
+/**
+ * Public fallback endpoint (new)
+ *
+ * Purpose: deployed frontend sometimes cannot send auth cookie across origins;
+ * this endpoint returns ImageKit auth parameters without requiring the auth cookie.
+ *
+ * SECURITY: by default it's open. If you want minimal protection set
+ * IMAGEKIT_PUBLIC_AUTH_KEY in backend env and callers must send header:
+ *   x-imagekit-key: <IMAGEKIT_PUBLIC_AUTH_KEY>
+ */
+router.get("/auth-public", (req, res) => {
+  try {
+    if (process.env.IMAGEKIT_PUBLIC_AUTH_KEY) {
+      const incoming = req.header("x-imagekit-key");
+      if (!incoming || incoming !== process.env.IMAGEKIT_PUBLIC_AUTH_KEY) {
+        return res.status(403).json({ error: "forbidden" });
+      }
+    }
+
+    const result = imagekit.getAuthenticationParameters();
+    return res.json(result);
+  } catch (err) {
+    console.error("GET /imagekit/auth-public error:", err);
+    return res.status(500).json({ error: "failed to create auth params" });
+  }
+});
 
 /**
  * POST /imagekit/generate-blur
@@ -56,19 +66,7 @@ router.post("/generate-blur", authMiddleware, async (req, res) => {
 
     const tinyUrl = `${imageKitUrl}?tr=w-16,fo-auto,fl-lossy,f-webp,q-40`;
 
-    // get fetch implementation (global or dynamic)
-    let fetchImpl;
-    try {
-      fetchImpl = await getFetch();
-    } catch (err) {
-      console.error("generate-blur fetch error:", err);
-      return res.status(500).json({
-        error:
-          "Server does not have a fetch implementation. Install 'node-fetch' or run on Node 18+.",
-      });
-    }
-
-    const r = await fetchImpl(tinyUrl);
+    const r = await fetch(tinyUrl);
     if (!r.ok)
       return res.status(502).json({ error: "failed to fetch tiny image" });
 
@@ -78,13 +76,12 @@ router.post("/generate-blur", authMiddleware, async (req, res) => {
     const base64 = buf.toString("base64");
     const blurDataURL = `data:${mime};base64,${base64}`;
 
-    // Optional: store blurDataURL into product doc on server-side (recommended for production)
+    // optional server-side save commented out (keeps your original logic)
     /*
     if (productId) {
       try {
         const p = await Product.findById(productId);
         if (p) {
-          // adapt to your schema: here we assume variations[0].lqips is an array aligning with images
           p.variations = p.variations || [];
           const v = p.variations[0] || {};
           v.lqips = v.lqips || [];
