@@ -1,7 +1,6 @@
 // backend/routes/imagekit.routes.js
 const express = require("express");
 const ImageKit = require("imagekit");
-const fetch = require("node-fetch"); // if Node <18; otherwise you can use global fetch
 const authMiddleware = require("../middleware/auth.middleware");
 // const Product = require("../models/Product"); // uncomment if you want server-side saving
 
@@ -12,6 +11,28 @@ const imagekit = new ImageKit({
   privateKey: process.env.IMAGEKIT_PRIVATE_KEY,
   urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT,
 });
+
+/**
+ * Helper: get a fetch implementation.
+ * - Use global fetch if available (Node 18+ / Node 22 has it).
+ * - Otherwise attempt dynamic import of 'node-fetch' (only if installed).
+ *   If that also fails, handler will return 500 and explain the missing dependency.
+ */
+async function getFetch() {
+  if (typeof fetch !== "undefined") return fetch;
+  // dynamic import only when needed (so module load doesn't throw)
+  try {
+    const mod = await import("node-fetch");
+    // node-fetch v3 default export is the function
+    return mod.default || mod;
+  } catch (err) {
+    // rethrow to be handled by caller
+    throw new Error(
+      "No fetch available. Install 'node-fetch' or use Node 18+. Dynamic import failed: " +
+        err.message
+    );
+  }
+}
 
 router.get(
   "/auth",
@@ -26,9 +47,6 @@ router.get(
  * POST /imagekit/generate-blur
  * body: { imageKitUrl: string, productId?: string, imageIndex?: number }
  * Returns: { blurDataURL: 'data:image/xxx;base64,...' }
- *
- * NOTE: This endpoint returns a tiny (16px) transformed image from ImageKit,
- * base64-encodes it and returns it as a data URL suitable for next/image blurDataURL.
  */
 router.post("/generate-blur", authMiddleware, async (req, res) => {
   try {
@@ -36,12 +54,21 @@ router.post("/generate-blur", authMiddleware, async (req, res) => {
     if (!imageKitUrl)
       return res.status(400).json({ error: "imageKitUrl required" });
 
-    // Request a very small optimized image from ImageKit (16px width)
-    // ImageKit supports URL query transforms; tweak params if needed.
-    // Example: https://ik.imagekit.io/your_id/path.jpg?tr=w-16,fo-auto,fl-lossy,f-webp
     const tinyUrl = `${imageKitUrl}?tr=w-16,fo-auto,fl-lossy,f-webp,q-40`;
 
-    const r = await fetch(tinyUrl);
+    // get fetch implementation (global or dynamic)
+    let fetchImpl;
+    try {
+      fetchImpl = await getFetch();
+    } catch (err) {
+      console.error("generate-blur fetch error:", err);
+      return res.status(500).json({
+        error:
+          "Server does not have a fetch implementation. Install 'node-fetch' or run on Node 18+.",
+      });
+    }
+
+    const r = await fetchImpl(tinyUrl);
     if (!r.ok)
       return res.status(502).json({ error: "failed to fetch tiny image" });
 
