@@ -33,28 +33,34 @@ console.log("User model loaded:", !!User);
 app.use(express.json());
 app.use(cookieParser());
 
-// ==== START CORS fix (minimal & safe) ====
-const trimTrailingSlash = (u) =>
-  typeof u === "string" ? u.replace(/\/+$/, "") : u;
+// --- minimal CORS fix: trim trailing slashes and match incoming origin exactly ---
+const trimSlash = (s) => (typeof s === "string" ? s.replace(/\/+$/, "") : s);
 
-const allowedOrigins = [
-  process.env.FRONTEND_ORIGIN, // primary, e.g. https://px39-test-final-woad.vercel.app
-  process.env.FRONTEND_URL, // alternate if used
-  "http://localhost:3000", // dev
-]
-  .filter(Boolean)
-  .map(trimTrailingSlash);
+const configuredFrontendOrigin = trimSlash(
+  process.env.FRONTEND_ORIGIN || "https://px39-test-final-woad.vercel.app"
+);
+const configuredFrontendUrl = trimSlash(process.env.FRONTEND_URL || "");
 
+// Use a function so the server responds with the exact incoming Origin (no trailing slash mismatch)
 app.use(
   cors({
     origin: (incomingOrigin, callback) => {
-      // allow non-browser (no Origin header) requests
+      // allow non-browser requests (no Origin header)
       if (!incomingOrigin) return callback(null, true);
 
-      const cleaned = trimTrailingSlash(incomingOrigin);
-      if (allowedOrigins.includes(cleaned)) return callback(null, true);
+      const incomingClean = trimSlash(incomingOrigin);
 
-      console.warn("Blocked CORS origin:", incomingOrigin, "=>", cleaned);
+      // allow if matches FRONTEND_ORIGIN or FRONTEND_URL or localhost dev
+      if (
+        incomingClean === configuredFrontendOrigin ||
+        (configuredFrontendUrl && incomingClean === configuredFrontendUrl) ||
+        incomingClean === "http://localhost:3000"
+      ) {
+        return callback(null, true);
+      }
+
+      // otherwise reject
+      console.warn("Blocked CORS origin:", incomingOrigin, "=>", incomingClean);
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
@@ -67,10 +73,7 @@ app.use(
     methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
   })
 );
-
-// ensure preflight OPTIONS is handled
-app.options("*", cors());
-// ==== END CORS fix ====
+// --- end minimal CORS fix ---
 
 app.use(helmet());
 app.use(
@@ -115,7 +118,8 @@ app.get("/", (req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins, // array of sanitized origins
+    // use the same sanitized FRONTEND_ORIGIN for socket.io
+    origin: configuredFrontendOrigin,
     credentials: true,
   },
 });
