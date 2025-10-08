@@ -1,4 +1,3 @@
-// server.js (updated - simplified permissive CORS)
 require("dotenv").config();
 const express = require("express");
 const http = require("http");
@@ -6,9 +5,9 @@ const mongoose = require("mongoose");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const cookieParser = require("cookie-parser");
+const cors = require("cors");
 const path = require("path");
 const { Server } = require("socket.io");
-const cors = require("cors");
 
 const authRoutes = require("./routes/auth.routes");
 const adminRoutes = require("./routes/admin.routes");
@@ -18,59 +17,31 @@ const User = require("./models/User");
 
 const app = express();
 
-// IMPORTANT: behind a proxy (Render, etc.)
-app.set("trust proxy", 1);
-
-// Normalize frontend origins (remove trailing slashes)
-const FRONTEND_ORIGIN = (
-  process.env.FRONTEND_ORIGIN || "https://px39-frontend-test-1.onrender.com"
-).replace(/\/+$/, "");
-const FRONTEND_URL = (process.env.FRONTEND_URL || FRONTEND_ORIGIN).replace(
-  /\/+$/,
-  ""
-);
-
-// Optional project slug used for allowing vercel preview domains
-const PROJECT_SLUG = process.env.PROJECT_SLUG || "px39";
-
 // ——————— 1. Connect to MongoDB ———————
 const mongoUri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/px39";
-const mongooseOptions = { serverSelectionTimeoutMS: 10000 };
-
 mongoose
-  .connect(mongoUri, mongooseOptions)
+  .connect(mongoUri)
   .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("❌ MongoDB connection error:", err));
+  .catch((err) => {
+    console.error("❌ MongoDB connection error:", err);
+    process.exit(1);
+  });
 
-mongoose.connection.on("connected", () => console.log("mongoose: connected"));
-mongoose.connection.on("error", (err) =>
-  console.error("mongoose connection error:", err)
-);
-mongoose.connection.on("disconnected", () =>
-  console.warn("mongoose: disconnected")
-);
+console.log("User model loaded:", !!User);
 
 // ——————— 2. Global Middleware ———————
 app.use(express.json());
 app.use(cookieParser());
-
-// ====== START: simplified permissive CORS ======
-// Replace the previous strict/complex CORS logic with a permissive CORS
-// configuration so requests from any origin are accepted (allows credentials).
-// This prevents the server from blocking legitimate frontend requests during
-// development and from restrictive origin checks.
 app.use(
   cors({
-    origin: true, // reflect requester origin — allows all origins
+    origin: "https://px39-test-final-woad.vercel.app",
     credentials: true,
   })
 );
-// ====== END CORS ======
-
 app.use(helmet());
 app.use(
   rateLimit({
-    windowMs: 15 * 60 * 1000,
+    windowMs: 15 * 60 * 10000,
     max: 10000,
     message: "Too many requests, please try again later.",
   })
@@ -80,56 +51,26 @@ app.use(
 app.use("/auth", authRoutes);
 app.use("/admin", adminRoutes);
 app.use("/products", publicProductRoutes);
+// in backend/app.js or server.js (where routes are registered)
 app.use("/user", require("./routes/recentlyViewed.routes"));
+
 app.use("/api/wishlist", require("./routes/wishlist.routes"));
 app.use("/cart", require("./routes/cart.routes"));
-app.use("/orders", require("./routes/order.routes"));
+const orderRoutes = require("./routes/order.routes");
+app.use("/orders", orderRoutes);
 app.use("/imagekit", require("./routes/imagekit.routes"));
 app.use("/push", require("./routes/push.routes"));
 app.use("/contacts", require("./routes/contact.routes"));
 app.use("/payments", require("./routes/payments.routes"));
-app.use(
-  "/notifications",
-  (() => {
-    try {
-      return require("./routes/notifications.routes");
-    } catch (e) {
-      console.warn("Notifications route not mounted:", e.message);
-      // return a noop router so app.use won't crash
-      const r = express.Router();
-      return r;
-    }
-  })()
-);
 
-// --- Robust messages route mounting (fix for MODULE_NOT_FOUND) ---
-// Try several common filenames; if none found, don't crash — just warn.
-(() => {
-  const variants = [
-    "./routes/message.routes",
-    "./routes/messages.routes",
-    "./routes/message.route",
-    "./routes/messages.route",
-    "./routes/messageRoutes",
-  ];
-  let mounted = false;
-  for (const p of variants) {
-    try {
-      const r = require(p);
-      app.use("/messages", r);
-      console.log(`Mounted messages route from ${p}`);
-      mounted = true;
-      break;
-    } catch (err) {
-      // continue trying other variants
-    }
-  }
-  if (!mounted) {
-    console.warn(
-      "Messages route not mounted: none of the expected files found (tried message.routes/messages.routes/message.route)."
-    );
-  }
-})();
+app.use("/messages", require("./routes/message.routes"));
+// mount notifications (if file exists)
+try {
+  app.use("/notifications", require("./routes/notifications.routes"));
+} catch (e) {
+  // If notifications route not present, just keep going (helps safe deploy)
+  console.warn("Notifications route not mounted:", e.message);
+}
 
 // ——————— 4. Root Test Route ———————
 app.get("/", (req, res) => {
@@ -138,24 +79,31 @@ app.get("/", (req, res) => {
 
 // ——————— 5. Create HTTP server and Socket.IO ———————
 const server = http.createServer(app);
-
 const io = new Server(server, {
   cors: {
-    origin: true, // accept requests from any origin (reflect origin)
+    origin:
+      process.env.FRONTEND_ORIGIN || "https://px39-test-final-woad.vercel.app",
     credentials: true,
   },
 });
 
+// make io available in req.app
 app.set("io", io);
 
-/* Presence tracking (unchanged) */
+/**
+ * -------------------------
+ * Presence tracking additions
+ * -------------------------
+ */
 const onlineUsers = new Map();
+
 function addOnline(userId, socketId) {
   const id = String(userId);
   const set = onlineUsers.get(id) || new Set();
   set.add(socketId);
   onlineUsers.set(id, set);
 }
+
 function removeOnlineBySocket(socketId) {
   for (const [userId, set] of onlineUsers.entries()) {
     if (set.has(socketId)) {
@@ -167,6 +115,7 @@ function removeOnlineBySocket(socketId) {
   }
   return null;
 }
+
 async function getOnlineUsersDetailed() {
   const ids = Array.from(onlineUsers.keys());
   if (ids.length === 0) return [];
@@ -182,18 +131,29 @@ async function getOnlineUsersDetailed() {
     sockets: onlineUsers.get(String(u._id))?.size || 0,
   }));
 }
+/* end presence additions */
 
+/**
+ * Reliable emit helper attached to io
+ * - emits directly to each known socket id for user (onlineUsers map)
+ * - falls back to room-based emit (io.to(userId).emit)
+ */
 io.emitToUser = function (userId, event, payload) {
   try {
     const uid = String(userId);
     const set = onlineUsers.get(uid);
     if (set && set.size) {
-      for (const sid of set.values()) io.to(sid).emit(event, payload);
+      for (const sid of set.values()) {
+        // direct socket-id emit
+        io.to(sid).emit(event, payload);
+      }
+      // also emit to user-room (harmless duplicate for clients that joined room)
       io.to(uid).emit(event, payload);
       console.log(
         `io.emitToUser: emitted '${event}' to user ${uid} on ${set.size} sockets`
       );
     } else {
+      // fallback to room emit
       io.to(uid).emit(event, payload);
       console.log(
         `io.emitToUser: emitted '${event}' to room ${uid} (no socket-id map entry)`
@@ -204,14 +164,24 @@ io.emitToUser = function (userId, event, payload) {
   }
 };
 
+/* simple socket auth/register pattern (client should emit 'register' with userId after login) */
 io.on("connection", (socket) => {
   console.log("socket connected:", socket.id);
+
   socket.on("register", async (userId) => {
+    console.log(`socket ${socket.id} register called with userId:`, userId);
     try {
-      if (!userId) return;
+      if (!userId) {
+        console.log("register: no userId provided");
+        return;
+      }
       socket.data.userId = String(userId);
       addOnline(socket.data.userId, socket.id);
+
+      // join user-specific room
       socket.join(String(userId));
+
+      // attach basic user info for authorization checks (best-effort)
       try {
         const u = await User.findById(userId)
           .select("role username email avatarUrl")
@@ -220,6 +190,13 @@ io.on("connection", (socket) => {
       } catch (err) {
         socket.data.user = null;
       }
+
+      console.log(
+        `socket ${socket.id} joined room ${String(userId)}. rooms:`,
+        Array.from(socket.rooms)
+      );
+
+      // broadcast updated online list to all connected sockets
       const list = await getOnlineUsersDetailed();
       io.emit("online:update", list);
     } catch (err) {
@@ -229,8 +206,9 @@ io.on("connection", (socket) => {
 
   socket.on("online:get", async (payload, cb) => {
     try {
-      if (!socket.data.user || socket.data.user.role !== "admin")
+      if (!socket.data.user || socket.data.user.role !== "admin") {
         return cb && cb({ error: "unauthorized" });
+      }
       const list = await getOnlineUsersDetailed();
       return cb && cb({ ok: true, users: list });
     } catch (err) {
@@ -249,40 +227,8 @@ io.on("connection", (socket) => {
   });
 });
 
-// ===== Error handler (removed origin checks; kept behavior) =====
-app.use((err, req, res, next) => {
-  try {
-    console.error(
-      "Unhandled request error:",
-      err && (err.stack || err.message || err)
-    );
-    if (!res.headersSent) {
-      const status = (err && err.status) || 500;
-      return res.status(status).json({ error: err?.message || "Server error" });
-    }
-    return next(err);
-  } catch (inner) {
-    console.error("Error-handling middleware failure:", inner);
-    if (!res.headersSent)
-      return res.status(500).json({ error: "Server error" });
-    return next(inner);
-  }
-});
-
-process.on("unhandledRejection", (reason, p) => {
-  console.error(
-    "UNHANDLED REJECTION at:",
-    p,
-    "reason:",
-    reason && (reason.stack || reason)
-  );
-});
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT EXCEPTION:", err && (err.stack || err));
-});
-
 // ——————— 6. Start the server ———————
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
-  console.log(`🚀 Server listening on port ${PORT}`);
+  console.log(`🚀 Server listening on http://localhost:${PORT}`);
 });

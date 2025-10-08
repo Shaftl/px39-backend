@@ -2,24 +2,18 @@
 
 /**
  * permitRoles(...allowedRoles)
- * Usage: router.use(authMiddleware, permitRoles('admin'))
- * Accepts either multiple args or an array: permitRoles('admin','moderator') or permitRoles(['admin'])
+ * Usage: router.get('/admin', authMiddleware, permitRoles('admin'), handler)
  */
 function permitRoles(...allowedRoles) {
-  // support permitRoles(['admin']) or permitRoles('admin')
-  if (allowedRoles.length === 1 && Array.isArray(allowedRoles[0])) {
-    allowedRoles = allowedRoles[0];
-  }
-
   return (req, res, next) => {
+    // req.user is set by authMiddleware
     if (!req.user) {
       return res.status(401).json({ message: "Unauthorized" });
     }
-    const role = req.user.role;
-    if (!role || !allowedRoles.includes(role)) {
+    if (!allowedRoles.includes(req.user.role)) {
       return res.status(403).json({ message: "Forbidden: insufficient role" });
     }
-    return next();
+    next();
   };
 }
 
