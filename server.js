@@ -40,52 +40,15 @@ console.log("User model loaded:", !!User);
 app.use(express.json());
 app.use(cookieParser());
 
-/**
- * Robust CORS setup:
- * - Use FRONTEND_ORIGINS env var (comma-separated) to allow multiple origins.
- * - Falls back to sensible defaults (local dev + known deployments).
- * - Allows requests with no origin (server-to-server, mobile, curl).
- */
-const rawOrigins = process.env.FRONTEND_ORIGINS || "";
-const allowedOrigins = rawOrigins
-  ? rawOrigins
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-  : [
-      // sensible defaults — add/remove as needed
-      "https://px39-test-final-woad.vercel.app",
-    ];
-
-console.log("CORS allowed origins:", allowedOrigins);
+const frontendOrigin =
+  process.env.FRONTEND_ORIGIN ||
+  process.env.FRONTEND_URL ||
+  "https://px39-test-final-woad.vercel.app";
 
 app.use(
   cors({
-    origin: function (origin, callback) {
-      // allow requests with no origin (mobile apps, server-to-server, curl)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.indexOf(origin) !== -1) {
-        return callback(null, true);
-      } else {
-        const msg = `CORS policy: origin '${origin}' is not allowed`;
-        console.warn(msg);
-        return callback(new Error(msg), false);
-      }
-    },
+    origin: frontendOrigin,
     credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "x-imagekit-key",
-      "X-Requested-With",
-      "Accept",
-      "x-requested-with",
-      "Origin",
-      "Referer",
-    ],
-    preflightContinue: false,
-    optionsSuccessStatus: 204,
   })
 );
 
@@ -130,22 +93,10 @@ app.get("/", (req, res) => {
 
 // ——————— 5. Create HTTP server and Socket.IO ———————
 const server = http.createServer(app);
-
-// socket.io CORS: use same allowed origins (socket.io accepts array or boolean)
-const ioCorsOrigins = allowedOrigins.length ? allowedOrigins : true;
-
 const io = new Server(server, {
   cors: {
-    origin: ioCorsOrigins,
+    origin: frontendOrigin,
     credentials: true,
-    methods: ["GET", "POST"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "x-imagekit-key",
-      "X-Requested-With",
-      "Accept",
-    ],
   },
 });
 
