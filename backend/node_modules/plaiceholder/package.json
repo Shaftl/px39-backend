@@ -1,0 +1,49 @@
+{
+  "name": "plaiceholder",
+  "version": "3.0.0",
+  "description": "Beautiful image placeholders, without the hassle.",
+  "author": "Joe Bell (https://joebell.co.uk)",
+  "license": "Apache-2.0",
+  "repository": "joe-bell/plaiceholder.git",
+  "bugs": "https://github.com/joe-bell/plaiceholder/issues",
+  "homepage": "https://github.com/joe-bell/plaiceholder#readme",
+  "keywords": [
+    "base64",
+    "css",
+    "lqip",
+    "placeholder",
+    "plaiceholder",
+    "svg"
+  ],
+  "module": "./dist/plaiceholder.esm.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/plaiceholder.esm.js",
+      "default": "./dist/plaiceholder.esm.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "sharp": ">= 0.30.6"
+  },
+  "devDependencies": {
+    "@types/node": "20.1.7",
+    "@types/sharp": "0.32.0",
+    "microbundle": "0.15.1",
+    "rimraf": "5.0.1",
+    "sharp": "0.32.1",
+    "typescript": "5.0.4"
+  },
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "microbundle src/index.ts --external sharp --no-compress --tsconfig tsconfig.json --format esm",
+    "clean": "rimraf {dist,.rts2*}",
+    "dev": "pnpm build -- watch",
+    "lint:ts": "tsc --noEmit"
+  }
+}
