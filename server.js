@@ -11,6 +11,7 @@ const { Server } = require("socket.io");
 
 const authRoutes = require("./routes/auth.routes");
 const adminRoutes = require("./routes/admin.routes");
+const orderRoutes = require("./routes/order.routes");
 const publicProductRoutes = require("./routes/products.routes");
 
 const User = require("./models/User");
@@ -91,6 +92,7 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    // <-- added idempotency header name variants here so preflight accepts them
     allowedHeaders: [
       "Content-Type",
       "Authorization",
@@ -99,6 +101,12 @@ app.use(
       "Accept",
       "Origin",
       "Referer",
+      "Idempotency-Key",
+      "idempotency-key",
+      "X-Idempotency-Key",
+      "x-idempotency-key",
+      // some clients might use camelCase or other variants:
+      "idempotencyKey",
     ],
     preflightContinue: false,
     optionsSuccessStatus: 204,
@@ -122,7 +130,6 @@ app.use("/user", require("./routes/recentlyViewed.routes"));
 
 app.use("/api/wishlist", require("./routes/wishlist.routes"));
 app.use("/cart", require("./routes/cart.routes"));
-const orderRoutes = require("./routes/order.routes");
 app.use("/orders", orderRoutes);
 app.use("/imagekit", require("./routes/imagekit.routes"));
 app.use("/push", require("./routes/push.routes"));
@@ -153,12 +160,18 @@ const io = new Server(server, {
     origin: ioCorsOrigins,
     credentials: true,
     methods: ["GET", "POST"],
+    // <-- mirror idempotency header variants here as well
     allowedHeaders: [
       "Content-Type",
       "Authorization",
       "x-imagekit-key",
       "X-Requested-With",
       "Accept",
+      "Idempotency-Key",
+      "idempotency-key",
+      "X-Idempotency-Key",
+      "x-idempotency-key",
+      "idempotencyKey",
     ],
   },
 });
